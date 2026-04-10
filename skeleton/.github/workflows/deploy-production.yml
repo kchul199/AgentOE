@@ -1,0 +1,52 @@
+name: Deploy to Production
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  deploy:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: backend
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/api:${{ steps.version.outputs.VERSION }}
+            ghcr.io/${{ github.repository }}/api:latest
+
+      - name: Deploy to K8s Production
+        uses: azure/k8s-deploy@v4
+        with:
+          namespace: agentoe
+          manifests: k8s/production/
+          images: ghcr.io/${{ github.repository }}/api:${{ steps.version.outputs.VERSION }}
+          strategy: rolling
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          release_name: AgentOE ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: false

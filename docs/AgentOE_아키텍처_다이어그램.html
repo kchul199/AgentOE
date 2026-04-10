@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentOE Platform — Interactive Architecture</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f1419 0%, #1a1f2e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: #16213e;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(90deg, #0b1d3a 0%, #0f3460 100%);
+            padding: 30px;
+            text-align: center;
+            border-bottom: 3px solid #e94560;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 8px;
+            color: #ffffff;
+        }
+
+        .header p {
+            font-size: 14px;
+            color: #a0aec0;
+        }
+
+        .tabs {
+            display: flex;
+            background: #0f3460;
+            border-bottom: 2px solid #1a1f2e;
+            padding: 0 20px;
+            gap: 10px;
+        }
+
+        .tab-button {
+            background: none;
+            border: none;
+            color: #9099a8;
+            padding: 16px 24px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            border-bottom: 3px solid transparent;
+            position: relative;
+            top: 2px;
+        }
+
+        .tab-button:hover {
+            color: #ffffff;
+        }
+
+        .tab-button.active {
+            color: #e94560;
+            border-bottom-color: #e94560;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 40px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        /* SVG Component Styles */
+        .architecture-diagram {
+            width: 100%;
+            height: 700px;
+            margin: 20px 0;
+            background: #1a2332;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+        }
+
+        .component-box {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .component-box rect {
+            fill: #0f3460;
+            stroke: #e94560;
+            stroke-width: 2;
+            transition: all 0.2s ease;
+        }
+
+        .component-box:hover rect {
+            fill: #1a4d7e;
+            stroke: #ff6b7f;
+            stroke-width: 3;
+            filter: drop-shadow(0 0 8px rgba(233, 69, 96, 0.4));
+        }
+
+        .component-box text {
+            fill: #ffffff;
+            font-size: 13px;
+            font-weight: 600;
+            text-anchor: middle;
+        }
+
+        .component-label {
+            fill: #a0aec0;
+            font-size: 11px;
+        }
+
+        .arrow-line {
+            stroke: #0f3460;
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#arrowhead);
+        }
+
+        .arrow-line.active {
+            stroke: #e94560;
+            stroke-width: 2.5;
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: #0b1d3a;
+            border: 2px solid #e94560;
+            color: #ffffff;
+            padding: 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            line-height: 1.6;
+            max-width: 300px;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .tooltip.visible {
+            display: block;
+        }
+
+        /* FSM Diagram Styles */
+        .fsm-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 30px;
+        }
+
+        .fsm-diagram {
+            width: 100%;
+            height: 500px;
+            background: #1a2332;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+            margin: 20px 0;
+        }
+
+        .fsm-state {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .fsm-state circle {
+            fill: #0f3460;
+            stroke: #e94560;
+            stroke-width: 2;
+            transition: all 0.2s ease;
+        }
+
+        .fsm-state.active circle {
+            fill: #52c41a;
+            stroke: #73d13d;
+            stroke-width: 3;
+            filter: drop-shadow(0 0 12px rgba(82, 196, 26, 0.4));
+        }
+
+        .fsm-state text {
+            fill: #ffffff;
+            font-size: 12px;
+            font-weight: 600;
+            text-anchor: middle;
+            pointer-events: none;
+        }
+
+        .fsm-transition {
+            stroke: #0f3460;
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#arrowhead-fsm);
+        }
+
+        .fsm-label {
+            fill: #a0aec0;
+            font-size: 11px;
+            text-anchor: middle;
+        }
+
+        .control-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        button {
+            background: #0f3460;
+            border: 2px solid #e94560;
+            color: #ffffff;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            background: #e94560;
+            color: #ffffff;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Policy Gate Styles */
+        .policy-gate-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .policy-row {
+            display: grid;
+            grid-template-columns: 80px 150px 200px 1fr;
+            gap: 15px;
+            padding: 16px;
+            background: #0f3460;
+            border-radius: 6px;
+            border-left: 4px solid #e94560;
+        }
+
+        .policy-row.g1 {
+            border-left-color: #52c41a;
+        }
+
+        .policy-row.g2 {
+            border-left-color: #faad14;
+        }
+
+        .policy-row.g3 {
+            border-left-color: #faad14;
+        }
+
+        .policy-row.g4 {
+            border-left-color: #fa8c16;
+        }
+
+        .policy-row.g5 {
+            border-left-color: #ff4d4f;
+        }
+
+        .policy-level {
+            font-weight: 700;
+            color: #e94560;
+        }
+
+        .policy-name {
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .policy-condition {
+            color: #a0aec0;
+            font-size: 13px;
+        }
+
+        .policy-example {
+            color: #7a8a9e;
+            font-size: 12px;
+            font-style: italic;
+        }
+
+        /* Multi-tenant Styles */
+        .tenant-container {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .tenant-box {
+            background: #0f3460;
+            border: 2px solid #0f3460;
+            border-radius: 8px;
+            padding: 20px;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .tenant-box:hover {
+            border-color: #e94560;
+            background: #1a4d7e;
+        }
+
+        .tenant-box h3 {
+            color: #e94560;
+            margin-bottom: 12px;
+            font-size: 16px;
+        }
+
+        .tenant-box p {
+            color: #a0aec0;
+            font-size: 12px;
+            margin-bottom: 8px;
+            line-height: 1.6;
+        }
+
+        .isolation-info {
+            background: #1a2332;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #e94560;
+        }
+
+        .isolation-info h3 {
+            color: #ffffff;
+            margin-bottom: 12px;
+        }
+
+        .isolation-info p {
+            color: #a0aec0;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+
+        .rbac-roles {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .role-badge {
+            background: #0f3460;
+            padding: 8px 12px;
+            border-radius: 4px;
+            text-align: center;
+            font-size: 11px;
+            color: #a0aec0;
+            border: 1px solid #0f3460;
+        }
+
+        .role-badge:first-child {
+            border-color: #e94560;
+            color: #e94560;
+        }
+
+        /* Info Section */
+        .info-section {
+            background: #1a2332;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border-left: 4px solid #0f3460;
+        }
+
+        .info-section h3 {
+            color: #ffffff;
+            margin-bottom: 12px;
+            font-size: 16px;
+        }
+
+        .info-section p {
+            color: #a0aec0;
+            line-height: 1.7;
+            font-size: 13px;
+            margin-bottom: 8px;
+        }
+
+        .highlight {
+            color: #e94560;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>AgentOE Platform</h1>
+            <p>차세대 멀티테넌트 Agentic AI 음성 콜봇 플랫폼 — Interactive Architecture Diagram</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-button active" data-tab="architecture">전체 시스템 아키텍처</button>
+            <button class="tab-button" data-tab="fsm">세션 FSM 상태</button>
+            <button class="tab-button" data-tab="policy">Policy Gate 플로우</button>
+            <button class="tab-button" data-tab="multitenant">멀티테넌트 격리</button>
+        </div>
+
+        <!-- Tab 1: Architecture -->
+        <div id="architecture" class="tab-content active">
+            <h2 style="margin-bottom: 20px; color: #ffffff;">전체 시스템 아키텍처 개요</h2>
+            <svg class="architecture-diagram" viewBox="0 0 1200 700" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <polygon points="0 0, 10 3, 0 6" fill="#0f3460" />
+                    </marker>
+                </defs>
+
+                <!-- Left: VBGW -->
+                <g class="component-box" onclick="showTooltip(event, 'vbgw')">
+                    <rect x="20" y="280" width="140" height="100" rx="6"/>
+                    <text x="90" y="310">VBGW</text>
+                    <text x="90" y="328" class="component-label">Voice Bridge</text>
+                    <text x="90" y="345" class="component-label">Gateway</text>
+                    <text x="90" y="362" style="fill: #e94560; font-size: 10px;">gRPC/WebSocket</text>
+                </g>
+
+                <!-- Arrow: VBGW to API Gateway -->
+                <line class="arrow-line" x1="160" y1="330" x2="220" y2="330" marker-end="url(#arrowhead)"/>
+
+                <!-- Top Center: API Gateway -->
+                <g class="component-box" onclick="showTooltip(event, 'apigw')">
+                    <rect x="220" y="250" width="140" height="160" rx="6"/>
+                    <text x="290" y="285">API Gateway</text>
+                    <text x="290" y="303" class="component-label">(Nginx)</text>
+                    <text x="290" y="330">FastAPI</text>
+                    <text x="290" y="348" class="component-label">Backend</text>
+                    <text x="290" y="365" class="component-label">(3 pods)</text>
+                    <text x="290" y="395" style="fill: #e94560; font-size: 10px;">Cluster</text>
+                </g>
+
+                <!-- Arrow: API Gateway to Data Layer -->
+                <line class="arrow-line" x1="290" y1="410" x2="290" y2="480" marker-end="url(#arrowhead)"/>
+
+                <!-- Center: Data Layer -->
+                <g class="component-box" onclick="showTooltip(event, 'redis')">
+                    <rect x="180" y="480" width="120" height="80" rx="6"/>
+                    <text x="240" y="510">Redis 7</text>
+                    <text x="240" y="530" class="component-label">Hot State</text>
+                    <text x="240" y="547" class="component-label">Lock/Circuit</text>
+                </g>
+
+                <!-- Bidirectional arrow between Redis and MongoDB -->
+                <line class="arrow-line" x1="300" y1="520" x2="380" y2="520" marker-end="url(#arrowhead)"/>
+                <line class="arrow-line" x1="380" y1="520" x2="300" y2="520" marker-end="url(#arrowhead)"/>
+
+                <g class="component-box" onclick="showTooltip(event, 'mongodb')">
+                    <rect x="380" y="480" width="140" height="80" rx="6"/>
+                    <text x="450" y="510">MongoDB</text>
+                    <text x="450" y="530" class="component-label">Replica Set (rs0)</text>
+                    <text x="450" y="547" class="component-label">9 Collections</text>
+                </g>
+
+                <!-- Arrow: API Gateway to External Services -->
+                <line class="arrow-line" x1="360" y1="330" x2="530" y2="330" marker-end="url(#arrowhead)"/>
+
+                <!-- Right: External AI Services -->
+                <g class="component-box" onclick="showTooltip(event, 'stt')">
+                    <rect x="530" y="180" width="140" height="100" rx="6"/>
+                    <text x="600" y="210">Groq STT</text>
+                    <text x="600" y="228" class="component-label">Whisper v3 Turbo</text>
+                    <text x="600" y="245" class="component-label">PCM 16kHz</text>
+                    <text x="600" y="262" style="fill: #e94560; font-size: 10px;">WER &lt; 15%</text>
+                </g>
+
+                <g class="component-box" onclick="showTooltip(event, 'llm')">
+                    <rect x="530" y="310" width="140" height="100" rx="6"/>
+                    <text x="600" y="340">Groq LLM</text>
+                    <text x="600" y="358" class="component-label">Llama 4 Scout</text>
+                    <text x="600" y="375" class="component-label">스트리밍 응답</text>
+                    <text x="600" y="392" style="fill: #e94560; font-size: 10px;">128K Context</text>
+                </g>
+
+                <g class="component-box" onclick="showTooltip(event, 'tts')">
+                    <rect x="530" y="440" width="140" height="100" rx="6"/>
+                    <text x="600" y="470">Google TTS</text>
+                    <text x="600" y="488" class="component-label">Neural2 ko-KR</text>
+                    <text x="600" y="505" class="component-label">PCM 22kHz</text>
+                    <text x="600" y="522" style="fill: #e94560; font-size: 10px;">P95 &lt; 300ms</text>
+                </g>
+
+                <!-- Arrows: Backend to AI Services -->
+                <line class="arrow-line" x1="530" y1="230" x2="670" y2="230" marker-end="url(#arrowhead)"/>
+                <line class="arrow-line" x1="530" y1="360" x2="670" y2="360" marker-end="url(#arrowhead)"/>
+                <line class="arrow-line" x1="530" y1="490" x2="670" y2="490" marker-end="url(#arrowhead)"/>
+
+                <!-- Bottom: Storage & Audit -->
+                <g class="component-box" onclick="showTooltip(event, 'storage')">
+                    <rect x="180" y="600" width="160" height="70" rx="6"/>
+                    <text x="260" y="630">Object Storage</text>
+                    <text x="260" y="648" class="component-label">Recordings</text>
+                </g>
+
+                <g class="component-box" onclick="showTooltip(event, 'audit')">
+                    <rect x="380" y="600" width="160" height="70" rx="6"/>
+                    <text x="460" y="630">Audit Log</text>
+                    <text x="460" y="648" class="component-label">Time Series</text>
+                </g>
+
+                <!-- Arrow: DB to Storage/Audit -->
+                <line class="arrow-line" x1="260" y1="560" x2="260" y2="600" marker-end="url(#arrowhead)"/>
+                <line class="arrow-line" x1="460" y1="560" x2="460" y2="600" marker-end="url(#arrowhead)"/>
+
+                <!-- Admin Console: Top Left -->
+                <g class="component-box" onclick="showTooltip(event, 'admin')">
+                    <rect x="780" y="50" width="140" height="80" rx="6"/>
+                    <text x="850" y="80">Admin Console</text>
+                    <text x="850" y="98" class="component-label">(React)</text>
+                    <text x="850" y="115" style="fill: #e94560; font-size: 10px;">Web UI</text>
+                </g>
+
+                <!-- Arrow: Admin to API Gateway -->
+                <line class="arrow-line" x1="780" y1="90" x2="360" y2="290" marker-end="url(#arrowhead)"/>
+            </svg>
+
+            <div class="info-section">
+                <h3>구성 요소 설명</h3>
+                <p><span class="highlight">VBGW (Voice Bridge Gateway):</span> 음성 입력을 gRPC/WebSocket으로 수신하며, SESSION_HELLO, AUDIO_CHUNK, VAD, BARGE_IN 이벤트 처리</p>
+                <p><span class="highlight">API Gateway & FastAPI Cluster:</span> 요청 라우팅, 세션 FSM 관리, Policy Gate 검증, MCP 거버넌스</p>
+                <p><span class="highlight">Data Layer:</span> Redis는 실시간 세션 상태와 분산 Lock, Circuit Breaker 카운터 관리. MongoDB는 영구 저장소로 9개 컬렉션과 Time Series 감사 로그 보유</p>
+                <p><span class="highlight">AI Services:</span> Groq는 저지연 STT/LLM, Google TTS는 자연스러운 한국어 음성 합성</p>
+                <p><span class="highlight">Admin Console:</span> 테넌트별 설정, 정책 관리, 모니터링을 위한 React 기반 웹 인터페이스</p>
+            </div>
+
+            <p style="color: #7a8a9e; font-size: 12px; margin-top: 20px; text-align: center;">💡 각 컴포넌트를 클릭하여 자세한 정보 확인</p>
+        </div>
+
+        <!-- Tab 2: FSM -->
+        <div id="fsm" class="tab-content">
+            <h2 style="margin-bottom: 20px; color: #ffffff;">세션 생애주기 (FSM)</h2>
+            <svg class="fsm-diagram" viewBox="0 0 1200 500" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <marker id="arrowhead-fsm" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <polygon points="0 0, 10 3, 0 6" fill="#0f3460" />
+                    </marker>
+                </defs>
+
+                <!-- State Circles -->
+                <!-- IDLE -->
+                <g class="fsm-state idle-state" onclick="highlightFSMState('IDLE')">
+                    <circle cx="100" cy="250" r="40"/>
+                    <text x="100" y="255">IDLE</text>
+                </g>
+
+                <!-- LISTENING -->
+                <g class="fsm-state" onclick="highlightFSMState('LISTENING')">
+                    <circle cx="250" cy="250" r="40"/>
+                    <text x="250" y="255">LISTENING</text>
+                </g>
+
+                <!-- SPEAKING_DETECTED -->
+                <g class="fsm-state" onclick="highlightFSMState('SPEAKING_DETECTED')">
+                    <circle cx="400" cy="150" r="40"/>
+                    <text x="400" y="145">SPEAKING</text>
+                    <text x="400" y="162">DETECTED</text>
+                </g>
+
+                <!-- PROCESSING -->
+                <g class="fsm-state" onclick="highlightFSMState('PROCESSING')">
+                    <circle cx="550" cy="250" r="40"/>
+                    <text x="550" y="255">PROCESSING</text>
+                </g>
+
+                <!-- INFERRING -->
+                <g class="fsm-state" onclick="highlightFSMState('INFERRING')">
+                    <circle cx="700" cy="150" r="40"/>
+                    <text x="700" y="155">INFERRING</text>
+                </g>
+
+                <!-- RESPONDING -->
+                <g class="fsm-state" onclick="highlightFSMState('RESPONDING')">
+                    <circle cx="850" cy="250" r="40"/>
+                    <text x="850" y="255">RESPONDING</text>
+                </g>
+
+                <!-- ENDED -->
+                <g class="fsm-state" onclick="highlightFSMState('ENDED')">
+                    <circle cx="1000" cy="250" r="40"/>
+                    <text x="1000" y="255">ENDED</text>
+                </g>
+
+                <!-- Transitions -->
+                <line class="fsm-transition" x1="140" y1="250" x2="210" y2="250" marker-end="url(#arrowhead-fsm)"/>
+                <text class="fsm-label" x="175" y="240">VAD_START</text>
+
+                <line class="fsm-transition" x1="290" y1="220" x2="360" y2="180" marker-end="url(#arrowhead-fsm)"/>
+                <text class="fsm-label" x="315" y="190">AUDIO_CHUNK</text>
+
+                <line class="fsm-transition" x1="430" y1="140" x2="510" y2="220" marker-end="url(#arrowhead-fsm)"/>
+                <text class="fsm-label" x="465" y="170">VAD_END</text>
+
+                <line class="fsm-transition" x1="590" y1="220" x2="660" y2="180" marker-end="url(#arrowhead-fsm)"/>
+                <text class="fsm-label" x="615" y="190">STT+LLM_START</text>
+
+                <line class="fsm-transition" x1="730" y1="140" x2="810" y2="220" marker-end="url(#arrowhead-fsm)"/>
+                <text class="fsm-label" x="765" y="170">LLM_COMPLETE</text>
+
+                <line class="fsm-transition" x1="890" y1="250" x2="960" y2="250" marker-end="url(#arrowhead-fsm)"/>
+                <text class="fsm-label" x="925" y="240">COMPLETE</text>
+
+                <!-- Loop back: RESPONDING -> LISTENING -->
+                <path class="fsm-transition" d="M 870 290 Q 850 380 250 380 Q 150 380 250 290" fill="none" marker-end="url(#arrowhead-fsm)"/>
+                <text class="fsm-label" x="550" y="410">BARGE_IN or Auto-Continue</text>
+
+                <!-- Loop: Timeout back to IDLE -->
+                <path class="fsm-transition" d="M 60 210 Q 0 100 60 100 Q 120 100 120 210" fill="none" marker-end="url(#arrowhead-fsm)"/>
+                <text class="fsm-label" x="40" y="80">SESSION_TIMEOUT</text>
+
+                <!-- SESSION_END to ENDED -->
+                <line class="fsm-transition" x1="890" y1="270" x2="960" y2="270" marker-end="url(#arrowhead-fsm)" style="stroke: #ff4d4f;"/>
+                <text class="fsm-label" x="920" y="295" style="fill: #ff4d4f;">SESSION_END</text>
+            </svg>
+
+            <div class="control-buttons">
+                <button onclick="simulateFSM()">시뮬레이션 시작</button>
+                <button onclick="resetFSM()">리셋</button>
+            </div>
+
+            <div class="info-section">
+                <h3>상태 설명</h3>
+                <p><span class="highlight">IDLE:</span> 세션 초기 상태, VAD_START 신호 대기</p>
+                <p><span class="highlight">LISTENING:</span> 음성 수신 중, AUDIO_CHUNK 버퍼링</p>
+                <p><span class="highlight">SPEAKING_DETECTED:</span> 음성 끝 감지, VAD_END 대기</p>
+                <p><span class="highlight">PROCESSING:</span> STT 및 정책 검증 진행 중</p>
+                <p><span class="highlight">INFERRING:</span> LLM 추론 및 응답 생성 중</p>
+                <p><span class="highlight">RESPONDING:</span> TTS 음성 재생 중, BARGE_IN 감지 가능</p>
+                <p><span class="highlight">ENDED:</span> 세션 종료 상태</p>
+            </div>
+        </div>
+
+        <!-- Tab 3: Policy Gate -->
+        <div id="policy" class="tab-content">
+            <h2 style="margin-bottom: 20px; color: #ffffff;">Policy Gate — 5단계 리스크 분류</h2>
+
+            <div class="policy-gate-container">
+                <div class="policy-row g1">
+                    <div class="policy-level">G1</div>
+                    <div class="policy-name">조회 (Query)</div>
+                    <div class="policy-condition">조건: 없음</div>
+                    <div class="policy-example">예: 계좌 조회, 상품 정보 조회 → 항상 통과</div>
+                </div>
+
+                <div class="policy-row g2">
+                    <div class="policy-level">G2</div>
+                    <div class="policy-name">거래 (Transaction)</div>
+                    <div class="policy-condition">조건: 감시 및 로그</div>
+                    <div class="policy-example">예: 송금 < 1,000,000원 → 로그 후 승인</div>
+                </div>
+
+                <div class="policy-row g3">
+                    <div class="policy-level">G3</div>
+                    <div class="policy-name">인증 필요</div>
+                    <div class="policy-condition">조건: 사용자 인증 검증</div>
+                    <div class="policy-example">예: 대액 송금 → OTP 또는 2FA 요구</div>
+                </div>
+
+                <div class="policy-row g4">
+                    <div class="policy-level">G4</div>
+                    <div class="policy-name">이중 승인</div>
+                    <div class="policy-condition">조건: 관리자 2명 승인</div>
+                    <div class="policy-example">예: 권한 변경, 설정 수정 → 감사자 2명 승인</div>
+                </div>
+
+                <div class="policy-row g5">
+                    <div class="policy-level">G5</div>
+                    <div class="policy-name">법무 검토</div>
+                    <div class="policy-condition">조건: 법무 팀 검토</div>
+                    <div class="policy-example">예: 계약 수정, 정책 변경 → 항상 거부 또는 법무 검토</div>
+                </div>
+            </div>
+
+            <div class="info-section" style="margin-top: 30px;">
+                <h3>Policy Gate 평가 프로세스</h3>
+                <p>1️⃣ 사용자 요청이 들어옴 (액션, 권한 레벨)</p>
+                <p>2️⃣ FastAPI Policy Engine이 요청 속성 분석 (risk_level, resource, user_role)</p>
+                <p>3️⃣ Policy Gate G1~G5 중 적절한 레벨 결정</p>
+                <p>4️⃣ 해당 레벨의 조건 검증:
+                    <br/>&nbsp;&nbsp;• <span class="highlight">G1</span> → 즉시 승인
+                    <br/>&nbsp;&nbsp;• <span class="highlight">G2</span> → 감시 로그 기록 후 승인
+                    <br/>&nbsp;&nbsp;• <span class="highlight">G3</span> → 사용자 인증(OTP) 요구 → Y:승인, N:거부
+                    <br/>&nbsp;&nbsp;• <span class="highlight">G4</span> → 감사자 2명 승인 대기
+                    <br/>&nbsp;&nbsp;• <span class="highlight">G5</span> → 항상 거부 또는 법무 팀으로 에스컬레이션
+                </p>
+                <p>5️⃣ 결과 통지 및 감사 추적</p>
+            </div>
+        </div>
+
+        <!-- Tab 4: Multi-tenant -->
+        <div id="multitenant" class="tab-content">
+            <h2 style="margin-bottom: 20px; color: #ffffff;">멀티테넌트 아키텍처 — 완전 격리</h2>
+
+            <div class="tenant-container">
+                <div class="tenant-box" onclick="highlightTenant('A')">
+                    <h3>Tenant A</h3>
+                    <p>🏢 예: 금융사 A</p>
+                    <p>사용자: 1,000명</p>
+                    <p>세션: 월 50,000건</p>
+                    <p>격리: JWT tenant_id=A</p>
+                </div>
+
+                <div class="tenant-box" onclick="highlightTenant('B')">
+                    <h3>Tenant B</h3>
+                    <p>🏢 예: 통신사 B</p>
+                    <p>사용자: 2,000명</p>
+                    <p>세션: 월 100,000건</p>
+                    <p>격리: JWT tenant_id=B</p>
+                </div>
+
+                <div class="tenant-box" onclick="highlightTenant('C')">
+                    <h3>Tenant C</h3>
+                    <p>🏢 예: 커머스 C</p>
+                    <p>사용자: 500명</p>
+                    <p>세션: 월 20,000건</p>
+                    <p>격리: JWT tenant_id=C</p>
+                </div>
+            </div>
+
+            <div class="isolation-info">
+                <h3>🔒 격리 메커니즘</h3>
+                <p><span class="highlight">API Gateway (JWT Token):</span> 각 요청의 tenant_id를 JWT에서 추출하여 FastAPI 컨텍스트에 설정. 다른 테넌트의 리소스 접근 불가</p>
+                <p><span class="highlight">MongoDB (Collection 필터):</span> 모든 쿼리에 {tenant_id: X} 필터 자동 추가. 인덱싱으로 성능 보장 (composite index: tenant_id + session_id)</p>
+                <p><span class="highlight">Redis (Key Prefix):</span> 키 구조: session:{tenant_id}:{session_id}:{field}. 별도의 namespace로 테넌트 간 데이터 혼합 방지</p>
+            </div>
+
+            <div class="isolation-info">
+                <h3>👤 RBAC (역할 기반 접근 제어)</h3>
+                <p>8가지 역할 계층 구조:</p>
+                <div class="rbac-roles">
+                    <div class="role-badge">super_admin</div>
+                    <div class="role-badge">tenant_admin</div>
+                    <div class="role-badge">policy_manager</div>
+                    <div class="role-badge">operator</div>
+                    <div class="role-badge">auditor</div>
+                    <div class="role-badge">analyst</div>
+                    <div class="role-badge">agent_manager</div>
+                    <div class="role-badge">viewer</div>
+                </div>
+                <p style="margin-top: 15px;"><span class="highlight">super_admin:</span> 모든 테넌트 관리 (플랫폼 관리자만)</p>
+                <p><span class="highlight">tenant_admin:</span> 자신 테넌트의 모든 설정 관리</p>
+                <p><span class="highlight">policy_manager:</span> Policy Gate 규칙 수정</p>
+                <p><span class="highlight">operator:</span> 일상적 운영 (모니터링, 문제 해결)</p>
+                <p><span class="highlight">viewer:</span> 읽기 전용 접근</p>
+            </div>
+
+            <div class="info-section">
+                <h3>데이터 흐름 예시</h3>
+                <p><span class="highlight">요청 1 (Tenant A 사용자):</span> GET /api/sessions?tenant_id=A → FastAPI는 JWT에서 tenant_id=A 확인 → MongoDB {tenant_id: "A"} 필터로 쿼리 → 결과만 반환</p>
+                <p><span class="highlight">요청 2 (Tenant B 사용자):</span> 같은 endpoint 호출 → FastAPI는 JWT에서 tenant_id=B 확인 → MongoDB {tenant_id: "B"} 필터로 쿼리 → 결과만 반환</p>
+                <p><span class="highlight">보안:</span> Tenant A의 악의적 사용자가 {tenant_id: "B"} 파라미터를 조작해도, JWT 토큰의 tenant_id=A가 우선되어 격리 유지</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        // Tab Navigation
+        document.querySelectorAll('.tab-button').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const tabId = e.target.dataset.tab;
+                switchTab(tabId);
+            });
+        });
+
+        function switchTab(tabId) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+
+            // Show selected tab
+            document.getElementById(tabId).classList.add('active');
+            document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+        }
+
+        // Tooltip System
+        function showTooltip(event, componentId) {
+            const tooltips = {
+                vbgw: "음성 브리지 게이트웨이 (Voice Bridge Gateway)<br/><br/>음성 입력을 gRPC + WebSocket으로 수신<br/>SESSION_HELLO, AUDIO_CHUNK, VAD, BARGE_IN 이벤트 처리<br/>다중 클라이언트 동시 지원",
+                apigw: "API Gateway & FastAPI Backend<br/><br/>요청 라우팅 및 로드 밸런싱<br/>세션 FSM 상태 관리<br/>Policy Gate G1~G5 검증<br/>MCP 거버넌스 및 Whitelist 관리",
+                redis: "Redis 7 Cache Layer<br/><br/>실시간 세션 상태 저장<br/>분산 Lock (세션별 동시 제어)<br/>Circuit Breaker 카운터<br/>P99 응답시간 < 10ms",
+                mongodb: "MongoDB Replica Set (rs0)<br/><br/>9개 컬렉션: sessions, audio_events, transcriptions, llm_responses, call_logs, tenant_config, policies, audit_logs, recordings<br/>TTL 인덱스로 자동 만료<br/>Time Series 감사 로그<br/>Change Streams 실시간 감시",
+                stt: "Groq Whisper Large v3 Turbo<br/><br/>실시간 음성-텍스트 변환<br/>PCM 16kHz 입력 지원<br/>Word Error Rate (WER) < 15%<br/>P95 지연시간 < 500ms<br/>한국어 및 다국어 지원",
+                llm: "Groq Llama 4 Scout LLM<br/><br/>스트리밍 토큰 기반 응답 생성<br/>Filler Audio 전략 (사용자 만족도 향상)<br/>128K 토큰 컨텍스트 윈도우<br/>멀티턴 대화 지원<br/>Policy Gate 기반 응답 필터링",
+                tts: "Google Cloud Text-to-Speech Neural2<br/><br/>한국어 자연스러운 음성 합성<br/>PCM 22kHz 고품질 출력<br/>Mean Opinion Score (MOS) > 3.5<br/>P95 지연시간 < 300ms<br/>감정 표현 및 프로소디 지원",
+                storage: "Object Storage (S3/GCS)<br/><br/>음성 녹음 저장<br/>영구 보관 (감사 & 컴플라이언스)<br/>지역별 다중 복제<br/>접근 제어 및 암호화",
+                audit: "Audit Log (MongoDB Time Series)<br/><br/>모든 API 호출 기록<br/>Policy Gate 판정 결과<br/>Kill Switch 이벤트<br/>사용자 행동 추적<br/>규제 준수를 위한 불변 로그",
+                admin: "Admin Console (React Web UI)<br/><br/>테넌트별 설정 관리<br/>Policy Gate 규칙 수정<br/>리소스 모니터링 (CPU, 메모리, 네트워크)<br/>감사 로그 조회<br/>Kill Switch 제어"
+            };
+
+            const tooltip = document.getElementById('tooltip');
+            tooltip.innerHTML = tooltips[componentId] || 'No description available';
+
+            const rect = event.currentTarget.getBoundingClientRect();
+            tooltip.style.left = (rect.left + window.scrollX + rect.width / 2 - 150) + 'px';
+            tooltip.style.top = (rect.top + window.scrollY - 120) + 'px';
+            tooltip.classList.add('visible');
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.component-box') && !e.target.closest('.tenant-box')) {
+                document.getElementById('tooltip').classList.remove('visible');
+            }
+        });
+
+        // FSM Simulation
+        const fsmStates = ['IDLE', 'LISTENING', 'SPEAKING_DETECTED', 'PROCESSING', 'INFERRING', 'RESPONDING', 'ENDED'];
+        let currentFSMIndex = 0;
+        let fsmIntervalId = null;
+
+        function highlightFSMState(state) {
+            document.querySelectorAll('.fsm-state').forEach(s => {
+                s.classList.remove('active');
+            });
+            document.querySelector(`.${state.toLowerCase()}-state`)?.classList.add('active');
+        }
+
+        function simulateFSM() {
+            if (fsmIntervalId) return;
+            currentFSMIndex = 0;
+            highlightFSMState(fsmStates[currentFSMIndex]);
+
+            fsmIntervalId = setInterval(() => {
+                currentFSMIndex++;
+                if (currentFSMIndex >= fsmStates.length) {
+                    clearInterval(fsmIntervalId);
+                    fsmIntervalId = null;
+                    return;
+                }
+                highlightFSMState(fsmStates[currentFSMIndex]);
+            }, 1500);
+        }
+
+        function resetFSM() {
+            if (fsmIntervalId) clearInterval(fsmIntervalId);
+            fsmIntervalId = null;
+            currentFSMIndex = 0;
+            document.querySelectorAll('.fsm-state').forEach(s => {
+                s.classList.remove('active');
+            });
+        }
+
+        function highlightTenant(tenant) {
+            console.log('Tenant selected:', tenant);
+            // Could add visual highlighting here
+        }
+    </script>
+</body>
+</html>
