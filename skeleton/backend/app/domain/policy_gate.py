@@ -1,10 +1,10 @@
 """Policy Gate: G1~G5 risk classification and evaluation."""
-from enum import StrEnum
+from enum import Enum
 from dataclasses import dataclass
 from typing import Any
 
 
-class PolicyLevel(StrEnum):
+class PolicyLevel(str, Enum):
     G1 = "G1"  # 일반 조회 — 즉시 처리
     G2 = "G2"  # 개인정보 조회 — 로깅 필요
     G3 = "G3"  # 금융 거래 — 추가 인증 필요

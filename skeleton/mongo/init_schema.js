@@ -1,101 +1,120 @@
-// AgentOE MongoDB Schema Initialization Script
-// Run: mongosh "mongodb://admin:pass@localhost:27017/?authSource=admin" init_schema.js
+// MongoDB 초기 스키마 및 인덱스 생성
+// Sprint 1: Agent, Call, Session 컬렉션 기본 구조
 
-const DB_NAME = "agentoe";
-const db = db.getSiblingDB(DB_NAME);
-
-print("=== AgentOE MongoDB Schema Initialization ===");
-
-// ─── 1. sessions ───────────────────────────────────────────────────────────
-db.createCollection("sessions");
-db.sessions.createIndex({ "session_id": 1 }, { unique: true, name: "idx_session_id_unique" });
-db.sessions.createIndex({ "tenant_id": 1, "status": 1 }, { name: "idx_tenant_status" });
-db.sessions.createIndex({ "tenant_id": 1, "created_at": -1 }, { name: "idx_tenant_created" });
-db.sessions.createIndex(
-  { "expires_at": 1 },
-  { expireAfterSeconds: 0, name: "idx_ttl_expires" }
-);
-print("✓ sessions collection ready");
-
-// ─── 2. audit_events (Time Series) ─────────────────────────────────────────
-db.createCollection("audit_events", {
-  timeseries: {
-    timeField: "timestamp",
-    metaField: "metadata",
-    granularity: "seconds"
-  },
-  expireAfterSeconds: 7776000 // 90 days TTL
-});
-db.audit_events.createIndex(
-  { "metadata.tenant_id": 1, "timestamp": -1 },
-  { name: "idx_tenant_timestamp" }
-);
-db.audit_events.createIndex(
-  { "metadata.session_id": 1, "timestamp": -1 },
-  { name: "idx_session_timestamp" }
-);
-print("✓ audit_events (Time Series) collection ready");
-
-// ─── 3. policies ────────────────────────────────────────────────────────────
-db.createCollection("policies");
-db.policies.createIndex({ "policy_id": 1 }, { unique: true, name: "idx_policy_id_unique" });
-db.policies.createIndex({ "tenant_id": 1, "level": 1 }, { name: "idx_tenant_level" });
-db.policies.createIndex({ "tenant_id": 1, "scenario_ids": 1 }, { name: "idx_tenant_scenario" });
-print("✓ policies collection ready");
-
-// ─── 4. connectors ──────────────────────────────────────────────────────────
-db.createCollection("connectors");
-db.connectors.createIndex({ "connector_id": 1 }, { unique: true, name: "idx_connector_id_unique" });
-db.connectors.createIndex({ "tenant_id": 1, "type": 1 }, { name: "idx_tenant_type" });
-db.connectors.createIndex({ "tenant_id": 1, "enabled": 1 }, { name: "idx_tenant_enabled" });
-print("✓ connectors collection ready");
-
-// ─── 5. tenants ─────────────────────────────────────────────────────────────
-db.createCollection("tenants");
-db.tenants.createIndex({ "tenant_id": 1 }, { unique: true, name: "idx_tenant_id_unique" });
-db.tenants.createIndex({ "plan": 1, "enabled": 1 }, { name: "idx_plan_enabled" });
-print("✓ tenants collection ready");
-
-// ─── 6. kill_switches ───────────────────────────────────────────────────────
-db.createCollection("kill_switches");
-db.kill_switches.createIndex({ "switch_id": 1 }, { unique: true, name: "idx_switch_id_unique" });
-db.kill_switches.createIndex({ "scope": 1, "target_id": 1, "active": 1 }, { name: "idx_scope_target" });
-print("✓ kill_switches collection ready");
-
-// ─── 7. circuit_breaker_events ──────────────────────────────────────────────
-db.createCollection("circuit_breaker_events", {
-  timeseries: {
-    timeField: "timestamp",
-    metaField: "service_meta",
-    granularity: "seconds"
-  },
-  expireAfterSeconds: 604800 // 7 days
-});
-print("✓ circuit_breaker_events (Time Series) collection ready");
-
-// ─── 8. users (Admin Console) ───────────────────────────────────────────────
-db.createCollection("users");
-db.users.createIndex({ "user_id": 1 }, { unique: true, name: "idx_user_id_unique" });
-db.users.createIndex({ "tenant_id": 1, "email": 1 }, { unique: true, name: "idx_tenant_email_unique" });
-db.users.createIndex({ "tenant_id": 1, "role": 1 }, { name: "idx_tenant_role" });
-print("✓ users collection ready");
-
-// ─── 9. scenarios ───────────────────────────────────────────────────────────
-db.createCollection("scenarios");
-db.scenarios.createIndex({ "scenario_id": 1, "tenant_id": 1 }, { unique: true, name: "idx_scenario_tenant_unique" });
-db.scenarios.createIndex({ "tenant_id": 1, "enabled": 1 }, { name: "idx_tenant_enabled" });
-print("✓ scenarios collection ready");
-
-// ─── Seed: default admin user ───────────────────────────────────────────────
-db.users.insertOne({
-  user_id: "usr_admin_default",
-  tenant_id: "system",
-  email: "admin@agentoe.io",
-  role: "super_admin",
-  created_at: new Date(),
-  enabled: true
+// 1. Agent 컬렉션 (콜봇 에이전트 설정)
+db.createCollection("agents", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["_id", "name", "type", "status", "created_at"],
+      properties: {
+        _id: { bsonType: "objectId" },
+        tenant_id: { bsonType: "string" },
+        name: { bsonType: "string", description: "에이전트 이름" },
+        type: { bsonType: "string", enum: ["voice_callbot", "asr", "tts"] },
+        status: { bsonType: "string", enum: ["active", "inactive", "testing"] },
+        config: {
+          bsonType: "object",
+          properties: {
+            model: { bsonType: "string" },
+            voice_id: { bsonType: "string" },
+            language: { bsonType: "string" },
+            system_prompt: { bsonType: "string" }
+          }
+        },
+        metrics: {
+          bsonType: "object",
+          properties: {
+            calls_total: { bsonType: "int" },
+            calls_completed: { bsonType: "int" },
+            avg_duration_ms: { bsonType: "int" },
+            success_rate: { bsonType: "double" }
+          }
+        },
+        created_at: { bsonType: "date" },
+        updated_at: { bsonType: "date" }
+      }
+    }
+  }
 });
 
-print("\n=== Schema initialization complete ===");
-print(`Database: ${DB_NAME}`);
-print(`Collections: ${db.getCollectionNames().join(", ")}`);
+db.agents.createIndex({ "tenant_id": 1, "status": 1 });
+db.agents.createIndex({ "type": 1 });
+
+// 2. Call 컬렉션 (통화 기록)
+db.createCollection("calls", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["_id", "agent_id", "status", "start_time"],
+      properties: {
+        _id: { bsonType: "objectId" },
+        tenant_id: { bsonType: "string" },
+        agent_id: { bsonType: "objectId" },
+        session_id: { bsonType: "objectId" },
+        phone_number: { bsonType: "string" },
+        status: { bsonType: "string", enum: ["initiated", "connected", "ended", "failed"] },
+        start_time: { bsonType: "date" },
+        end_time: { bsonType: "date" },
+        duration_ms: { bsonType: "int" },
+        transcript: { bsonType: "string" },
+        audio_url: { bsonType: "string" },
+        metadata: {
+          bsonType: "object",
+          properties: {
+            caller_id: { bsonType: "string" },
+            fail_reason: { bsonType: "string" },
+            ai_response_time_ms: { bsonType: "int" }
+          }
+        },
+        created_at: { bsonType: "date" }
+      }
+    }
+  }
+});
+
+db.calls.createIndex({ "tenant_id": 1, "agent_id": 1, "start_time": -1 });
+db.calls.createIndex({ "session_id": 1 });
+db.calls.createIndex({ "status": 1 });
+db.calls.createIndex({ "start_time": -1 }, { expireAfterSeconds: 7776000 }); // 90일 TTL
+
+// 3. Session 컬렉션 (멀티턴 세션)
+db.createCollection("sessions", {
+  validator: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["_id", "agent_id", "created_at"],
+      properties: {
+        _id: { bsonType: "objectId" },
+        tenant_id: { bsonType: "string" },
+        agent_id: { bsonType: "objectId" },
+        user_id: { bsonType: "string" },
+        status: { bsonType: "string", enum: ["active", "completed", "abandoned"] },
+        turns: {
+          bsonType: "array",
+          items: {
+            bsonType: "object",
+            properties: {
+              turn_id: { bsonType: "objectId" },
+              user_input: { bsonType: "string" },
+              ai_response: { bsonType: "string" },
+              timestamp: { bsonType: "date" }
+            }
+          }
+        },
+        created_at: { bsonType: "date" },
+        updated_at: { bsonType: "date" }
+      }
+    }
+  }
+});
+
+db.sessions.createIndex({ "tenant_id": 1, "agent_id": 1, "created_at": -1 });
+db.sessions.createIndex({ "user_id": 1 });
+db.sessions.createIndex({ "status": 1 });
+
+// 4. System Collections (향후 확장)
+// audit_logs, webhooks, api_keys 등은 필요시 추가
+
+print("✓ Schema initialization complete");
+print("Collections created: agents, calls, sessions");

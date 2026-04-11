@@ -1,0 +1,34 @@
+# Dev override: 더 빠른 개발 사이클을 위한 오버라이드
+# 사용: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    environment:
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: development
+    volumes:
+      - ./backend:/app          # 소스코드 실시간 반영
+      - /app/__pycache__        # 캐시는 컨테이너 내부에만
+
+  # 개발 중 mongo-express UI 추가 (선택)
+  mongo-express:
+    image: mongo-express:1.0
+    container_name: agentoe-mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}
+      ME_CONFIG_MONGODB_URL: mongodb://admin:${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}@mongo-primary:27017/?authSource=admin
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:-admin}
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+    networks:
+      - agentoe-net
+    restart: unless-stopped

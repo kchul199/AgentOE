@@ -1,0 +1,172 @@
+version: '3.9'
+
+services:
+
+  # ── MongoDB Replica Set ──────────────────────────────────────────────────
+  mongo-primary:
+    image: mongo:7.0
+    container_name: agentoe-mongo-primary
+    hostname: mongo-primary
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-primary-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}
+      MONGO_INITDB_DATABASE: agentoe
+    networks:
+      - agentoe-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  mongo-secondary:
+    image: mongo:7.0
+    container_name: agentoe-mongo-secondary
+    hostname: mongo-secondary
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-secondary-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}
+    networks:
+      - agentoe-net
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mongo-init:
+    image: mongo:7.0
+    container_name: agentoe-mongo-init
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+      mongo-secondary:
+        condition: service_started
+    networks:
+      - agentoe-net
+    volumes:
+      - ./mongo:/mongo-scripts
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        sleep 5
+        mongosh --host mongo-primary:27017 \
+          -u admin -p $${MONGO_ROOT_PASSWORD:-agentoe_dev_pass} \
+          --authenticationDatabase admin \
+          --quiet --eval "
+            try {
+              rs.status();
+              print('Replica set already initialized');
+            } catch(e) {
+              rs.initiate({
+                _id: 'rs0',
+                members: [
+                  { _id: 0, host: 'mongo-primary:27017', priority: 2 },
+                  { _id: 1, host: 'mongo-secondary:27017', priority: 1 }
+                ]
+              });
+              print('Replica set initialized');
+            }
+          "
+        sleep 5
+        mongosh --host mongo-primary:27017 \
+          -u admin -p $${MONGO_ROOT_PASSWORD:-agentoe_dev_pass} \
+          --authenticationDatabase admin \
+          /mongo-scripts/init_schema.js
+        echo 'Schema initialization done'
+    restart: "no"
+
+  # ── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: agentoe-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --loglevel warning
+    volumes:
+      - redis-data:/data
+    networks:
+      - agentoe-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── FastAPI Backend ──────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: agentoe-api
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URI: >-
+        mongodb://admin:${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}@mongo-primary:27017,mongo-secondary:27017/?replicaSet=rs0&authSource=admin
+      MONGODB_DB_NAME: agentoe
+      REDIS_URL: redis://redis:6379/0
+      GROQ_API_KEY: ${GROQ_API_KEY:-dummy-key-for-dev}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/google-tts.json
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./backend:/app
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agentoe-net
+    restart: unless-stopped
+
+  # ── Nginx (API Gateway) ──────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: agentoe-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+    networks:
+      - agentoe-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  mongo-primary-data:
+  mongo-secondary-data:
+  redis-data:
+
+networks:
+  agentoe-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

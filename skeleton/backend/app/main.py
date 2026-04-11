@@ -12,6 +12,9 @@ from app.core.config import settings
 from app.core.database import close_db, init_db
 from app.core.exceptions import AgentOEBaseError
 from app.core.logging import setup_logging
+from app.core.redis_client import close_redis, init_redis
+from app.middleware.kill_switch_middleware import KillSwitchMiddleware
+from app.middleware.logging_middleware import LoggingMiddleware
 
 logger = structlog.get_logger()
 
@@ -21,8 +24,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown events."""
     setup_logging()
     await init_db()
+    await init_redis()
     logger.info("AgentOE API started", version=settings.VERSION, env=settings.ENVIRONMENT)
     yield
+    await close_redis()
     await close_db()
     logger.info("AgentOE API shutdown complete")
 
@@ -43,6 +48,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(KillSwitchMiddleware)
+# LoggingMiddleware: 요청별 request_id/tenant_id context var 자동 주입
+# KillSwitch 이후 등록 → 정상 요청에만 로깅 적용
+app.add_middleware(LoggingMiddleware)
 
 
 @app.exception_handler(AgentOEBaseError)
