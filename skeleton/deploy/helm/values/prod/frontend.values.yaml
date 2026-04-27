@@ -1,0 +1,37 @@
+# agentoe-frontend  ·  production
+image:
+  repository: REPLACE_ECR_REGISTRY/agentoe-prod/frontend
+  tag: ""
+
+replicaCount: 3
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/wafv2-acl-arn: "REPLACE_WAF_ACL_ARN"
+    alb.ingress.kubernetes.io/group.name: agentoe-prod-public
+    alb.ingress.kubernetes.io/group.order: "200"
+    alb.ingress.kubernetes.io/certificate-arn: "REPLACE_ACM_ARN_PROD"
+  hosts:
+    - host: app.agentoe.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+runtimeEnv:
+  VITE_API_BASE_URL: "https://api.agentoe.io"
+  VITE_WS_BASE_URL: "wss://api.agentoe.io"
+  VITE_ENVIRONMENT: "production"
+  VITE_SENTRY_DSN: "REPLACE_SENTRY_DSN_PROD"
+  VITE_FEATURE_AGENTIC_BUILDER: "true"

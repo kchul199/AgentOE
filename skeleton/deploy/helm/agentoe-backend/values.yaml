@@ -1,0 +1,305 @@
+# ──────────────────────────────────────────────────────────────────────────
+# agentoe-backend — 기본값 (production 디폴트, dev/staging 은 values.{env}.yaml 로 override)
+#
+# 핵심 설계:
+# - 모든 외부 시크릿은 ExternalSecret 으로 동기화 → Secret 마운트 OR envFrom.
+# - HPA 는 CPU + 커스텀 메트릭 (active sessions, p95 latency) 두 축.
+# - PDB minAvailable 50% → 노드 drain 시 동시에 둘 이상 죽지 않음.
+# - WebSocket 친화: long-lived connection 이므로 preStop sleep + drain 시간 충분히.
+# - Bedrock/Groq/TTS 호출 IRSA: serviceAccount.annotations 에 외부에서 주입.
+# ──────────────────────────────────────────────────────────────────────────
+
+# ── 메타 ──────────────────────────────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: REPLACE_ECR/agentoe-staging/backend
+  tag: ""              # 비워두면 .Chart.AppVersion 사용
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# ── 레플리카 / 롤아웃 ────────────────────────────────────────────────────
+replicaCount: 3
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    # 한 번에 1개씩만 교체 — WS connection 손실 최소화.
+    maxSurge: 1
+    maxUnavailable: 0
+
+# Pod 노드 분산. AZ 단위 spread 강제.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: agentoe-backend
+
+affinity: {}
+nodeSelector: {}
+tolerations: []
+
+# Karpenter 가 만든 워커풀에 올라가도록 권장 라벨.
+# 운영 환경에선 이걸 nodeSelector 에 박아서 system NG 와 격리.
+# nodeSelector:
+#   agentoe.io/workload: backend
+
+# ── 컨테이너 / 포트 ──────────────────────────────────────────────────────
+container:
+  port: 8000
+  workers: 2          # uvicorn workers. 메모리/CPU 비율 보고 조정.
+  # gRPC server (VoicebotAiService — vbgw bridge 가 client). enabled=false 면 ALB만.
+  grpcEnabled: true
+  grpcPort: 50051
+
+# ── Health probes ────────────────────────────────────────────────────────
+# /api/v1/livez : 프로세스 살아있기만 하면 200 (재시작 트리거)
+# /api/v1/readyz: drain 중 OR Mongo/Redis 미연결이면 503 (트래픽 차단)
+livenessProbe:
+  httpGet:
+    path: /api/v1/livez
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/v1/readyz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /api/v1/livez
+    port: http
+  # 콜드 시작 시 JWKS / Mongo connection pool 채우는 시간.
+  initialDelaySeconds: 5
+  periodSeconds: 3
+  timeoutSeconds: 3
+  failureThreshold: 30
+
+# ── lifecycle (graceful shutdown) ───────────────────────────────────────
+# preStop sleep → readiness 503 → 새 트래픽 차단 → 진행 중인 WS drain.
+# terminationGracePeriodSeconds 는 (preStop sleep) + SHUTDOWN_DRAIN_TIMEOUT 보다 커야 한다.
+terminationGracePeriodSeconds: 90
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep 5 && curl -X POST -s http://localhost:8000/api/v1/livez/drain || true"]
+
+# ── Resources ────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2
+    memory: 2Gi
+
+# ── HPA ──────────────────────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 30
+  targetCPUUtilizationPercentage: 60
+  # custom metrics: 활성 세션 수 / pod 평균. Prometheus Adapter 가 노출하면 활성화.
+  customMetrics:
+    enabled: false
+    activeSessionsPerPod: 50
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0   # 빠른 스케일업
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+      selectPolicy: Max
+
+# ── PDB ──────────────────────────────────────────────────────────────────
+pdb:
+  enabled: true
+  minAvailable: "50%"
+
+# ── Service ─────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  annotations: {}
+
+# ── Ingress ─────────────────────────────────────────────────────────────
+# ALB Ingress (controller=alb) 기본. ingress-nginx 사용 시 className: nginx.
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/healthcheck-path: /api/v1/livez
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "10"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+    alb.ingress.kubernetes.io/success-codes: "200"
+    # WebSocket 60분 idle. 콜봇 통화 길이 고려.
+    alb.ingress.kubernetes.io/load-balancer-attributes: |
+      idle_timeout.timeout_seconds=3600,
+      routing.http2.enabled=true,
+      routing.http.drop_invalid_header_fields.enabled=true
+    # ACM 인증서 ARN — 환경별 values 에서 주입.
+    alb.ingress.kubernetes.io/certificate-arn: ""
+  hosts:
+    - host: api.agentoe.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+# ── ServiceAccount / IRSA ───────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  # cluster_bootstrap.backend_role_arn — 외부에서 주입.
+  annotations: {}
+
+# ── RBAC (앱이 K8s API 를 직접 호출 안 함 — 비활성 유지) ───────────────
+rbac:
+  create: false
+
+# ── Pod / Container security ────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# 읽기전용 RootFS — /tmp 등 임시 영역만 emptyDir.
+extraVolumes:
+  - name: tmp
+    emptyDir: {}
+extraVolumeMounts:
+  - name: tmp
+    mountPath: /tmp
+
+# ── ConfigMap (비-시크릿 설정) ───────────────────────────────────────────
+config:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  CORS_ORIGINS: '["https://app.agentoe.io"]'
+  WS_ALLOWED_ORIGINS: '["https://app.agentoe.io"]'
+  # ── connection pool & timeout ─────────────────────────────────────────
+  REDIS_POOL_SIZE: "50"
+  MONGODB_POOL_SIZE: "100"
+  HTTP_CONNECT_TIMEOUT: "2.0"
+  HTTP_READ_TIMEOUT: "8.0"
+  STT_TIMEOUT_SECONDS: "4.0"
+  LLM_TIMEOUT_SECONDS: "6.0"
+  TTS_TIMEOUT_SECONDS: "3.0"
+  # ── shutdown ──────────────────────────────────────────────────────────
+  SHUTDOWN_DRAIN_TIMEOUT_SECONDS: "60"
+  SHUTDOWN_ACTIVE_CALL_ANNOUNCE: "true"
+  # ── PII / 데이터 보존 ─────────────────────────────────────────────────
+  PII_MASKING_ENABLED: "true"
+  PII_RAW_PERSIST_ENABLED: "false"
+  AUDIO_PERSIST_ENABLED: "false"
+  SESSION_RETENTION_DAYS: "30"
+  AUDIT_RETENTION_DAYS: "365"
+  # ── Rate limit ────────────────────────────────────────────────────────
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_PER_IP_PER_MIN: "120"
+  RATE_LIMIT_PER_TENANT_PER_MIN: "6000"
+  # ── Idempotency ───────────────────────────────────────────────────────
+  IDEMPOTENCY_ENABLED: "true"
+  IDEMPOTENCY_TTL_SECONDS: "600"
+  # ── Agentic 롤아웃 ────────────────────────────────────────────────────
+  AGENTIC_DISABLED: "false"
+  AGENTIC_TENANTS: ""
+  AGENTIC_CANARY_PERCENT: "0"
+
+# ── External Secrets ────────────────────────────────────────────────────
+externalSecrets:
+  enabled: true
+  refreshInterval: "1h"
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: ClusterSecretStore
+  # AWS Secrets Manager 의 시크릿 이름 prefix (Terraform 의 ${project}/${env}).
+  secretsPrefix: "agentoe/staging"
+  # 동기화할 시크릿 정의 — terraform/modules/secrets 에서 만든 키와 일치.
+  data:
+    - remoteKey: "redis_auth_token"
+      secretKey: "REDIS_AUTH_TOKEN"
+    - remoteKey: "mongo_app_password"
+      secretKey: "MONGO_APP_PASSWORD"
+    # LLM/외부 API 키 — 외부에서 주입.
+    - remoteKey: "groq_api_key"
+      secretKey: "GROQ_API_KEY"
+    - remoteKey: "google_application_credentials"
+      secretKey: "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+    - remoteKey: "jwt_secret"
+      secretKey: "JWT_SECRET"
+
+# ── 정적 환경 변수 (시크릿이 아닌 endpoint 등) ───────────────────────
+endpoints:
+  # mongodb+srv://... — Atlas connection string 의 host 부분만 박고 user/pass 는 secret.
+  MONGODB_HOST: "REPLACE_ATLAS_SRV_HOST"
+  MONGODB_DB_NAME: "agentoe"
+  REDIS_HOST: "REPLACE_REDIS_PRIMARY_HOST"
+  REDIS_PORT: "6379"
+  JWKS_URL: ""
+  JWT_ISSUER: "https://auth.agentoe.io/"
+  JWT_AUDIENCE: "agentoe-api"
+
+# ── ServiceMonitor (kube-prometheus-stack) ──────────────────────────────
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  scrapeTimeout: 10s
+  path: /api/v1/metrics/prometheus
+  port: http
+  labels:
+    release: kube-prometheus-stack
+
+# ── NetworkPolicy ───────────────────────────────────────────────────────
+# 기본은 비활성. enable=true 로 켜면 ingress 허용은 ALB SG / monitoring NS 만,
+# egress 는 DNS / Atlas / Redis / 외부 API 만.
+networkPolicy:
+  enabled: false
+  ingress:
+    fromIngressNamespace: "ingress-nginx"
+    fromMonitoringNamespace: "monitoring"
+    # vbgw bridge → backend gRPC. 빈 문자열이면 NetworkPolicy 에 미추가 (gRPC 포트 차단).
+    # 운영: "vbgw" / "vbgw-staging" 같이 vbgw_v2 가 배포된 namespace 명시.
+    fromVbgwNamespace: ""
+  # 외부 egress 는 NetworkPolicy 만으로 제어 어려움 → Cilium / Calico 권장.
+
+# ── 추가 envFrom / env (override 용) ────────────────────────────────
+extraEnv: []
+extraEnvFrom: []
+
+# ── 우선순위 클래스 (운영 안정성) ────────────────────────────────────
+priorityClassName: ""

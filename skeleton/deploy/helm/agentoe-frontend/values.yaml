@@ -1,0 +1,187 @@
+# ──────────────────────────────────────────────────────────────────────────
+# agentoe-frontend — React SPA (nginx 컨테이너)
+#
+# 핵심:
+#   1) Stateless — restart/rolling 자유
+#   2) ConfigMap 으로 런타임 환경 변수 주입 (window.__ENV__) → 빌드 1번, 환경별 재배포 불필요
+#   3) ALB Ingress 가 /api/* → backend, 나머지 → frontend
+#   4) nginx 의 /healthz 엔드포인트 (정적 파일) 만으로 health 충분
+# ──────────────────────────────────────────────────────────────────────────
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: REPLACE_ECR/agentoe-staging/frontend
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: agentoe-frontend
+
+affinity: {}
+nodeSelector: {}
+tolerations: []
+
+container:
+  port: 8080         # nginx unprivileged container 기본 포트
+
+# nginx 의 정적 /healthz (200 빈 응답).
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+# SPA 는 fast start — startup probe 거의 즉시 통과.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 1
+  periodSeconds: 2
+  timeoutSeconds: 2
+  failureThreshold: 15
+
+terminationGracePeriodSeconds: 30
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep 5"]   # ALB target deregistration grace
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 0
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+# ── Ingress (ALB, single-LB pattern) ────────────────────────────────────
+# api.agentoe.io  → backend
+# app.agentoe.io  → frontend
+# 같은 ALB 공유하려면 group.name 동일 + group.order 분리.
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "10"
+    alb.ingress.kubernetes.io/success-codes: "200"
+    alb.ingress.kubernetes.io/group.name: agentoe-public
+    alb.ingress.kubernetes.io/group.order: "200"      # backend 보다 후순위
+    alb.ingress.kubernetes.io/certificate-arn: ""
+  hosts:
+    - host: app.agentoe.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101            # nginx unprivileged 표준 UID
+  runAsGroup: 101
+  fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# nginx 가 /var/cache/nginx, /var/run, /tmp 에 쓰기 필요 → emptyDir.
+extraVolumes:
+  - name: cache
+    emptyDir: {}
+  - name: run
+    emptyDir: {}
+  - name: tmp
+    emptyDir: {}
+extraVolumeMounts:
+  - name: cache
+    mountPath: /var/cache/nginx
+  - name: run
+    mountPath: /var/run
+  - name: tmp
+    mountPath: /tmp
+
+# ── 런타임 환경 변수 (window.__ENV__) ────────────────────────────────────
+# nginx entrypoint 에서 envsubst 로 /usr/share/nginx/html/env.js 생성 패턴.
+# SPA 빌드물은 환경별 동일 — 이 값만 바꾸면 끝.
+runtimeEnv:
+  VITE_API_BASE_URL: "https://api.agentoe.io"
+  VITE_WS_BASE_URL: "wss://api.agentoe.io"
+  VITE_ENVIRONMENT: "production"
+  VITE_SENTRY_DSN: ""
+  VITE_FEATURE_AGENTIC_BUILDER: "true"
+
+# 정적 nginx config override (선택).
+nginxConfig:
+  enabled: false
+  data: ""
+
+extraEnv: []
+extraEnvFrom: []
+priorityClassName: ""

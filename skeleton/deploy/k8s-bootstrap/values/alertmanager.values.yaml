@@ -1,0 +1,174 @@
+# ──────────────────────────────────────────────────────────────────────────
+# kube-prometheus-stack Alertmanager 라우팅 override
+#
+# 적용 방법:
+#   helm upgrade kube-prometheus-stack ... \
+#     -f values/kube-prometheus-stack.values.yaml \
+#     -f values/alertmanager.values.yaml
+#
+# 시크릿 (Slack webhook, PagerDuty integration key) 은 ESO 가 동기화한
+# K8s Secret 'alertmanager-receivers' 에서 읽음 — Helm values 에 평문 금지.
+# ──────────────────────────────────────────────────────────────────────────
+alertmanager:
+  # Alertmanager pod / replication
+  alertmanagerSpec:
+    replicas: 2
+    retention: 120h
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          storageClassName: gp3
+          resources:
+            requests:
+              storage: 10Gi
+    # ESO 가 만든 Secret 을 envFrom 으로 주입 — config 에서 ${ENV} 로 참조
+    secrets:
+      - alertmanager-receivers     # ESO 가 SLACK_WEBHOOK_URL_OPS, PD_INTEGRATION_KEY_PRIMARY 등 채워둠
+
+  config:
+    global:
+      resolve_timeout: 5m
+      slack_api_url_file: /etc/alertmanager/secrets/alertmanager-receivers/SLACK_API_URL_FILE   # optional
+      smtp_smarthost: ""
+
+    # ── 라우팅 트리 ────────────────────────────────────────────────────
+    # 우선순위:
+    #   1) severity=page 는 PagerDuty + Slack #ops-incident
+    #   2) severity=ticket 은 Slack 만 (#ops-alerts)
+    #   3) namespace 별 sub-route (vbgw/agentic/backend) 로 채널 분리
+    #   4) external-secrets 같은 인프라성은 #ops-platform
+    route:
+      receiver: slack-ops-default
+      group_by: ['alertname', 'service', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      routes:
+        # 1) page → PagerDuty (모든 severity=page)
+        - matchers:
+            - severity = page
+          receiver: pagerduty-primary
+          group_wait: 0s            # 페이지는 즉시
+          group_interval: 1m
+          repeat_interval: 1h
+          continue: true            # Slack 에도 떨어지도록 fall-through
+        # 2) page 도 항상 #ops-incident 에 미러
+        - matchers:
+            - severity = page
+          receiver: slack-ops-incident
+          group_wait: 0s
+          repeat_interval: 1h
+          continue: false           # 이쪽에서 종료 — slack-ops-default 까진 가지 않음
+
+        # 3) ticket — service 별 채널
+        - matchers:
+            - severity = ticket
+            - service =~ "vbgw|backend|agentic|auth"
+          receiver: slack-ops-alerts
+          group_wait: 1m
+          group_interval: 10m
+          repeat_interval: 4h
+          continue: false
+
+        # 4) infra (external-secrets / cert-manager 등 — 라벨 service 미부착)
+        - matchers:
+            - alertname =~ "ExternalSecretSyncFailure|PrometheusTargetDown|AgentoeDeploymentReplicasMismatch"
+          receiver: slack-ops-platform
+          continue: false
+
+    # ── 시간대 / 정적 라벨 기반 silence 권장 ────────────────────────────
+    # Alertmanager 의 time_intervals 로 한국 야간 (00–07 KST) 에는
+    # ticket 알람 silence — page 만 깨운다.
+    time_intervals:
+      - name: kst-night
+        time_intervals:
+          - times:
+              - start_time: "15:00"   # UTC 15:00 = KST 00:00
+                end_time:   "22:00"   # UTC 22:00 = KST 07:00
+            weekdays: ['monday:sunday']
+
+    # mute_time_intervals 적용 — ticket 만 야간 silence
+    inhibit_rules:
+      # 같은 service 의 page 가 발화 중이면 동일 service 의 ticket 은 억제 (중복 노이즈 방지)
+      - source_matchers:
+          - severity = page
+        target_matchers:
+          - severity = ticket
+        equal: ['service']
+      # SLO 계열은 같은 SLO 의 fast burn 이 raise 하면 slow burn / ticket 억제
+      - source_matchers:
+          - alertname =~ ".*FastBurn$"
+        target_matchers:
+          - alertname =~ ".*SlowBurn$|.*Ticket$"
+        equal: ['slo']
+
+    # ── receivers ─────────────────────────────────────────────────────
+    receivers:
+      # 기본 receiver (catch-all). 실제로는 거의 들어오면 안 되지만 fall-through 안전망.
+      - name: slack-ops-default
+        slack_configs:
+          - channel: '#ops-alerts'
+            send_resolved: true
+            title: "[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}"
+            text: |-
+              {{- range .Alerts }}
+              *{{ .Labels.severity | toUpper }}* — `{{ .Labels.service }}` — {{ .Annotations.summary }}
+              {{ .Annotations.description }}
+              {{- if .Annotations.runbook_url }}
+              :book: <{{ .Annotations.runbook_url }}|runbook>
+              {{- end -}}
+              {{- if .Annotations.grafana_url }} | <{{ .Annotations.grafana_url }}|grafana>{{- end -}}
+              {{- end }}
+
+      - name: slack-ops-incident
+        slack_configs:
+          - channel: '#ops-incident'
+            send_resolved: true
+            color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+            title: ":rotating_light: [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }} — {{ .CommonLabels.service }}"
+            text: |-
+              {{- range .Alerts }}
+              {{ .Annotations.summary }}
+              {{ .Annotations.description }}
+              :book: {{ .Annotations.runbook_url }}
+              {{- end }}
+
+      - name: slack-ops-alerts
+        slack_configs:
+          - channel: '#ops-alerts'
+            send_resolved: true
+            mute_time_intervals: ['kst-night']   # ticket 은 야간 silence
+            title: "[{{ .Status }}] {{ .GroupLabels.alertname }}"
+            text: |-
+              {{- range .Alerts }}
+              {{ .Annotations.summary }}
+              {{- if .Annotations.runbook_url }} <{{ .Annotations.runbook_url }}|runbook>{{- end -}}
+              {{- end }}
+
+      - name: slack-ops-platform
+        slack_configs:
+          - channel: '#ops-platform'
+            send_resolved: true
+            title: "[{{ .Status }}] {{ .GroupLabels.alertname }}"
+            text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+
+      - name: pagerduty-primary
+        pagerduty_configs:
+          - send_resolved: true
+            # 시크릿 파일에서 읽기 — values 에 평문 금지.
+            routing_key_file: /etc/alertmanager/secrets/alertmanager-receivers/PD_INTEGRATION_KEY_PRIMARY
+            severity: '{{ if eq .CommonLabels.severity "page" }}critical{{ else }}warning{{ end }}'
+            class: '{{ .CommonLabels.service }}'
+            component: '{{ .CommonLabels.alertname }}'
+            group: agentoe
+            description: "[{{ .Status }}] {{ .GroupLabels.alertname }} — {{ .CommonLabels.service }}"
+            details:
+              firing: '{{ template "pagerduty.default.instances" .Alerts.Firing }}'
+              num_firing: '{{ .Alerts.Firing | len }}'
+              num_resolved: '{{ .Alerts.Resolved | len }}'
+              runbook: '{{ (index .Alerts 0).Annotations.runbook_url }}'
+
+  # Alertmanager UI 외부 노출은 안 함 (kubectl port-forward 또는 SSO Ingress 별도)
+  ingress:
+    enabled: false

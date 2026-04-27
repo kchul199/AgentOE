@@ -1,0 +1,21 @@
+# kube-prometheus-stack 의 grafana sidecar 가
+# label `grafana_dashboard=1` 인 ConfigMap 을 자동 import.
+# 한 ConfigMap 에 모든 JSON 묶어 주입.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: agentoe-observability
+
+configMapGenerator:
+  - name: agentoe-grafana-dashboards
+    files:
+      - api-slo.json
+      - agentic.json
+      - vbgw.json
+      - infra.json

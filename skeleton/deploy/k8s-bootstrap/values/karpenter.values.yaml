@@ -1,0 +1,35 @@
+# Karpenter — production values
+# IRSA / NodeClass / NodePool 설정은 별도 manifests/karpenter-* 에서.
+
+settings:
+  # clusterName 은 Makefile --set 으로.
+  interruptionQueue: "" # SQS 큐 이름. spot interruption 핸들링용 (선택).
+
+replicas: 2
+
+nodeSelector:
+  node-pool: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+
+# 자기 자신은 절대 Karpenter 가 만든 노드에 올라가면 안 됨 (chicken-and-egg).
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node-pool
+              operator: In
+              values: ["system"]
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+serviceMonitor:
+  enabled: true

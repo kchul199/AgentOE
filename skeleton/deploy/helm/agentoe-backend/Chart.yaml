@@ -1,0 +1,23 @@
+apiVersion: v2
+name: agentoe-backend
+description: |
+  Agentic Callbot 백엔드 (FastAPI + uvicorn).
+  REST + WebSocket 게이트웨이로, Mongo/Redis 와 외부 LLM(Groq) / TTS(Google) 를 호출.
+type: application
+
+# x-y-z: chart 버전. 앱 버전과 분리.
+version: 0.1.0
+appVersion: "1.0.0"
+
+kubeVersion: ">=1.28.0-0"
+
+home: https://agentoe.io
+sources:
+  - https://github.com/agentoe/agentoe
+maintainers:
+  - name: AgentOE Platform
+    email: platform@agentoe.io
+
+annotations:
+  category: API
+  licenses: Proprietary

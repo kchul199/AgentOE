@@ -1,0 +1,31 @@
+────────────────────────────────────────────────────────────────────
+ agentoe-frontend  v{{ .Chart.AppVersion }}  (release: {{ .Release.Name }})
+────────────────────────────────────────────────────────────────────
+
+1. 롤아웃
+   kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "agentoe-frontend.fullname" . }}
+
+2. Health
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agentoe-frontend.fullname" . }} 8080:{{ .Values.service.port }} &
+   curl -s http://localhost:8080/healthz
+   curl -s http://localhost:8080/env.js   # window.__ENV__ JSON 확인
+
+3. Ingress
+{{- if .Values.ingress.enabled }}
+   kubectl -n {{ .Release.Namespace }} get ingress {{ include "agentoe-frontend.fullname" . }}
+   {{- range .Values.ingress.hosts }}
+   호스트: https://{{ .host }}
+   {{- end }}
+   주의: backend Ingress 와 같은 ALB 를 공유하려면 group.name 동일해야 함.
+{{- end }}
+
+────────────────────────────────────────────────────────────────────
+ 운영 포인트
+────────────────────────────────────────────────────────────────────
+  · SPA 빌드는 immutable — 환경 변수 바꿔도 image 재빌드 X.
+    runtimeEnv ConfigMap 값만 바꾸면 checksum/config 가 변해서 자동 롤링.
+  · 보안: readOnlyRootFilesystem + nginx unprivileged (UID 101).
+    cache/run/tmp 디렉토리는 emptyDir.
+  · Sentry / 분석 키 같은 비-시크릿 노출은 OK (브라우저로 어차피 내려감).
+    진짜 시크릿은 백엔드에 두고 BFF 패턴으로.
+────────────────────────────────────────────────────────────────────

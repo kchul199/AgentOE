@@ -1,0 +1,57 @@
+────────────────────────────────────────────────────────────────────
+ agentoe-backend  v{{ .Chart.AppVersion }}  (release: {{ .Release.Name }})
+────────────────────────────────────────────────────────────────────
+
+1. Pod 상태 확인
+   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+   kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "agentoe-backend.fullname" . }} --timeout=300s
+
+2. Health check (port-forward)
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agentoe-backend.fullname" . }} 8080:{{ .Values.service.port }} &
+   curl -s http://localhost:8080/api/v1/livez   # → {"status":"ok"}
+   curl -s http://localhost:8080/api/v1/readyz  # → {"status":"ready", ...}
+
+3. ExternalSecret 동기화 확인
+{{- if .Values.externalSecrets.enabled }}
+   kubectl -n {{ .Release.Namespace }} get externalsecret {{ include "agentoe-backend.fullname" . }}-secrets
+   kubectl -n {{ .Release.Namespace }} describe externalsecret {{ include "agentoe-backend.fullname" . }}-secrets | tail -20
+   # SyncedSecrets 가 데이터 키 갯수와 일치해야 함.
+{{- else }}
+   ⚠️ externalSecrets.enabled=false — 시크릿이 다른 경로로 주입되어야 합니다.
+{{- end }}
+
+4. Ingress / ALB 확인
+{{- if .Values.ingress.enabled }}
+   kubectl -n {{ .Release.Namespace }} get ingress {{ include "agentoe-backend.fullname" . }}
+   ALB 가 프로비저닝되면 ADDRESS 컬럼에 hostname 노출까지 보통 1~2 분.
+   {{- range .Values.ingress.hosts }}
+   호스트: https://{{ .host }}
+   {{- end }}
+{{- end }}
+
+5. HPA / PDB
+{{- if .Values.autoscaling.enabled }}
+   kubectl -n {{ .Release.Namespace }} get hpa {{ include "agentoe-backend.fullname" . }}
+{{- end }}
+{{- if .Values.pdb.enabled }}
+   kubectl -n {{ .Release.Namespace }} get pdb {{ include "agentoe-backend.fullname" . }}
+{{- end }}
+
+6. ServiceMonitor (Prometheus)
+{{- if .Values.serviceMonitor.enabled }}
+   kubectl -n {{ .Release.Namespace }} get servicemonitor {{ include "agentoe-backend.fullname" . }}
+   # Prometheus UI > Status > Targets 에서 backend 가 UP 인지 확인.
+{{- end }}
+
+7. 롤백
+   helm -n {{ .Release.Namespace }} rollback {{ .Release.Name }} <REV>
+
+────────────────────────────────────────────────────────────────────
+ 운영 체크리스트
+────────────────────────────────────────────────────────────────────
+  · WS idle timeout = ALB 3600s · preStop drain 동작 (lifecycle 로그 확인)
+  · /api/v1/readyz 가 drain 신호 받으면 503 반환하는지 검증
+  · IRSA SA annotation (eks.amazonaws.com/role-arn) 제대로 박혔는지 확인:
+    kubectl -n {{ .Release.Namespace }} get sa {{ include "agentoe-backend.serviceAccountName" . }} -o yaml
+  · MongoDB / Redis 연결 풀 크기 vs 실제 동시 연결수 모니터링
+────────────────────────────────────────────────────────────────────

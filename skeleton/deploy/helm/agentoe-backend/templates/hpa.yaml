@@ -1,0 +1,38 @@
+{{- if .Values.autoscaling.enabled -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "agentoe-backend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentoe-backend.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "agentoe-backend.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    # CPU — 1차 시그널. WS 가 idle 일 땐 CPU 가 낮으므로 customMetrics 와 병행해야 정확.
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- if .Values.autoscaling.customMetrics.enabled }}
+    # Pod 당 활성 세션 수 — Prometheus Adapter 가 active_sessions metric 을 노출해야 작동.
+    - type: Pods
+      pods:
+        metric:
+          name: agentoe_active_sessions
+        target:
+          type: AverageValue
+          averageValue: "{{ .Values.autoscaling.customMetrics.activeSessionsPerPod }}"
+    {{- end }}
+  {{- with .Values.autoscaling.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

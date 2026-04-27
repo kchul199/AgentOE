@@ -3,7 +3,7 @@ from fastapi import APIRouter
 
 from app.api.v1.routers import (
     admin, audit, auth, connectors, health,
-    kill_switch, metrics, policies, sessions, vbgw,
+    kill_switch, metrics, policies, scenarios, sessions, vbgw,
 )
 
 router = APIRouter()
@@ -11,6 +11,7 @@ router.include_router(health.router, tags=["health"])
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 router.include_router(policies.router, prefix="/policies", tags=["policies"])
+router.include_router(scenarios.router, prefix="/scenarios", tags=["scenarios"])
 router.include_router(connectors.router, prefix="/connectors", tags=["connectors"])
 router.include_router(kill_switch.router, prefix="/kill-switch", tags=["kill-switch"])
 router.include_router(audit.router, prefix="/audit", tags=["audit"])

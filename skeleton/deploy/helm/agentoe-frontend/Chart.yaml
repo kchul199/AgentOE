@@ -1,0 +1,17 @@
+apiVersion: v2
+name: agentoe-frontend
+description: |
+  Agentic Callbot React SPA — Vite 빌드 산출물을 nginx 컨테이너로 서빙.
+  ALB Ingress + ACM TLS, /api 백엔드 라우팅은 ALB rule 또는 nginx reverse-proxy 로 처리.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.28.0-0"
+keywords:
+  - agentoe
+  - frontend
+  - spa
+  - react
+maintainers:
+  - name: agentoe-platform
+    email: platform@agentoe.io

@@ -1,0 +1,84 @@
+# kube-prometheus-stack — staging baseline.
+# Prod 에선 Thanos / Mimir 또는 AMP 로 장기 저장 옮기는 걸 권장.
+
+# 시스템 노드에 모두 배치.
+defaults: &systemNS
+  nodeSelector:
+    node-pool: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+
+prometheus:
+  prometheusSpec:
+    <<: *systemNS
+    retention: 7d
+    retentionSize: "20GB"
+    walCompression: true
+    enableAdminAPI: false
+
+    # ServiceMonitor 자동 발견 — 모든 NS 대상.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          storageClassName: gp3
+          resources:
+            requests:
+              storage: 30Gi
+
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2
+        memory: 4Gi
+
+alertmanager:
+  alertmanagerSpec:
+    <<: *systemNS
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          storageClassName: gp3
+          resources:
+            requests:
+              storage: 5Gi
+
+grafana:
+  enabled: true
+  defaultDashboardsEnabled: true
+  <<: *systemNS
+  persistence:
+    enabled: true
+    storageClassName: gp3
+    size: 5Gi
+  service:
+    type: ClusterIP
+  # admin 비번은 ESO 로 주입 권장 — 임시값.
+  adminPassword: "change-me-via-eso"
+
+  # 사이드카가 ConfigMap 라벨 grafana_dashboard 로 자동 import.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+
+prometheusOperator:
+  <<: *systemNS
+
+# kubelet/cAdvisor/etcd 메트릭은 EKS 에서 일부 가려져 있어 비활성.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

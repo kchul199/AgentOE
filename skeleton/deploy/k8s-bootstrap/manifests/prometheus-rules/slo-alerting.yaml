@@ -1,0 +1,241 @@
+# ──────────────────────────────────────────────────────────────────────────
+# SLO alerting rules — multi-window multi-burn-rate (Google SRE Workbook ch.5)
+#
+# 두 윈도우 AND 조건:
+#   · short window 가 raise → 빠른 반응
+#   · long window 가 raise → 잘못된 page 방지 (스파이크 1회로 안 깨움)
+#
+# severity 라벨:
+#   page    → Alertmanager 가 PagerDuty 로
+#   ticket  → Slack 만
+#
+# burn rate 임계 = (1 - SLO) × multiplier 가 아니라, 실패율 자체에 multiplier 적용:
+#   실패율 > (1 - SLO) × burn_rate
+#   예) SLO=99.9%, burn=14.4 → 실패율 > 0.001 × 14.4 = 0.0144 = 1.44%
+# ──────────────────────────────────────────────────────────────────────────
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agentoe-slo-alerting
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: agentoe
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    # ── api success ───────────────────────────────────────────────────────
+    - name: agentoe.alerts.api.success
+      rules:
+        - alert: APIErrorBudgetBurn_FastBurn
+          expr: |
+            (1 - slo:http_request_success_ratio:rate5m)  > (1 - 0.999) * 14.4
+            and
+            (1 - slo:http_request_success_ratio:rate1h)  > (1 - 0.999) * 14.4
+          for: 2m
+          labels:
+            severity: page
+            slo: api_success
+            burn_rate: "14.4"
+            service: backend
+          annotations:
+            summary: "[page] API success burn rate 14.4× (2% budget / 1h)"
+            description: |
+              지난 5m + 1h 두 윈도우 모두에서 5xx 비율 > 1.44% (SLO 99.9% × burn 14.4).
+              현재 5m: {{ printf "%.4f" $value }}.
+            runbook_url: "https://github.com/agentoe/agentoe/blob/main/docs/runbook/alert-response-api-slo-burn.md"
+            grafana_url: "https://grafana.agentoe.io/d/api-slo"
+
+        - alert: APIErrorBudgetBurn_SlowBurn
+          expr: |
+            (1 - slo:http_request_success_ratio:rate30m) > (1 - 0.999) * 6.0
+            and
+            (1 - slo:http_request_success_ratio:rate6h)  > (1 - 0.999) * 6.0
+          for: 15m
+          labels:
+            severity: page
+            slo: api_success
+            burn_rate: "6"
+            service: backend
+          annotations:
+            summary: "[page] API success burn rate 6× (5% budget / 6h)"
+            description: |
+              지난 30m + 6h 두 윈도우 모두에서 5xx 비율 > 0.6%.
+              현재 30m: {{ printf "%.4f" $value }}.
+            runbook_url: "https://github.com/agentoe/agentoe/blob/main/docs/runbook/alert-response-api-slo-burn.md"
+
+        - alert: APIErrorBudgetBurn_Ticket
+          expr: |
+            (1 - slo:http_request_success_ratio:rate1h) > (1 - 0.999) * 1.0
+            and
+            (1 - slo:http_request_success_ratio:rate1d) > (1 - 0.999) * 1.0
+          for: 1h
+          labels:
+            severity: ticket
+            slo: api_success
+            burn_rate: "1"
+            service: backend
+          annotations:
+            summary: "[ticket] API success burn rate 1× (sustained 1d)"
+            description: "월간 budget 정상 소진 속도 초과 — 다음 영업시간 검토."
+
+    # ── api latency ───────────────────────────────────────────────────────
+    - name: agentoe.alerts.api.latency
+      rules:
+        - alert: APILatencyBudgetBurn_FastBurn
+          # SLO 99% under 500ms → 실패율 > 1% × 14.4 = 14.4%
+          expr: |
+            (1 - slo:http_latency_under_500ms:ratio5m) > 0.144
+            and
+            (1 - slo:http_latency_under_500ms:ratio1h) > 0.144
+          for: 2m
+          labels:
+            severity: page
+            slo: api_latency
+            burn_rate: "14.4"
+            service: backend
+          annotations:
+            summary: "[page] >14.4% requests slower than 500ms (5m & 1h)"
+            description: "API latency SLO 가 burn rate 14.4× 로 소진 중."
+
+        - alert: APILatencyBudgetBurn_Ticket
+          expr: |
+            (1 - slo:http_latency_under_500ms:ratio6h) > 0.01
+          for: 30m
+          labels:
+            severity: ticket
+            slo: api_latency
+            service: backend
+          annotations:
+            summary: "[ticket] API latency degraded (6h sustained)"
+
+    # ── agentic success ───────────────────────────────────────────────────
+    - name: agentoe.alerts.agentic.success
+      rules:
+        - alert: AgenticPipelineFailureBurn_FastBurn
+          # SLO 99.5% → 실패율 > 0.5% × 14.4 = 7.2%
+          expr: |
+            (1 - slo:agentic_success_ratio:rate5m) > 0.072
+            and
+            (1 - slo:agentic_success_ratio:rate1h) > 0.072
+          for: 2m
+          labels:
+            severity: page
+            slo: agentic_success
+            service: agentic
+          annotations:
+            summary: "[page] Agentic pipeline error rate spike"
+
+        - alert: AgenticPipelineFailureBurn_Ticket
+          expr: |
+            (1 - slo:agentic_success_ratio:rate1h) > 0.005
+            and
+            (1 - slo:agentic_success_ratio:rate1d) > 0.005
+          for: 30m
+          labels:
+            severity: ticket
+            slo: agentic_success
+            service: agentic
+          annotations:
+            summary: "[ticket] Agentic budget burning (sustained 1d)"
+
+    # ── agentic latency ───────────────────────────────────────────────────
+    - name: agentoe.alerts.agentic.latency
+      rules:
+        - alert: AgenticLatencySLOBreach
+          # SLO 95% under 2.5s → 실패율 > 5% × 14.4 = 72% (페이지)
+          # 현실적 ticket: > 5% (=정상치 초과)
+          expr: |
+            (1 - slo:agentic_latency_under_2_5s:ratio30m) > 0.05
+          for: 30m
+          labels:
+            severity: ticket
+            slo: agentic_latency
+            service: agentic
+          annotations:
+            summary: "[ticket] Agentic E2E p95 > 2.5s (30m)"
+
+    # ── vbgw call setup ──────────────────────────────────────────────────
+    - name: agentoe.alerts.vbgw.setup
+      rules:
+        - alert: VBGWCallSetupFailure_FastBurn
+          # SLO 99.9% → 실패율 > 0.1% × 14.4 = 1.44%
+          expr: |
+            (1 - slo:vbgw_call_setup_ratio:rate5m) > 0.0144
+            and
+            (1 - slo:vbgw_call_setup_ratio:rate1h) > 0.0144
+          for: 2m
+          labels:
+            severity: page
+            slo: vbgw_setup
+            service: vbgw
+          annotations:
+            summary: "[page] VBGW call setup failing — calls never connect"
+
+    # ── vbgw mid-call drop ───────────────────────────────────────────────
+    - name: agentoe.alerts.vbgw.drop
+      rules:
+        - alert: VBGWMidCallDrops_FastBurn
+          # SLO < 0.1% → drop 비율 > 0.1% × 14.4 = 1.44%
+          expr: |
+            slo:vbgw_mid_call_drop_ratio:rate5m > 0.0144
+            and
+            slo:vbgw_mid_call_drop_ratio:rate1h > 0.0144
+          for: 2m
+          labels:
+            severity: page
+            slo: vbgw_drop
+            service: vbgw
+          annotations:
+            summary: "[page] Active calls being dropped at burn rate 14.4×"
+
+    # ── auth jwks ─────────────────────────────────────────────────────────
+    - name: agentoe.alerts.auth.jwks
+      rules:
+        - alert: JWKSRefreshFailureSurge
+          expr: |
+            (1 - slo:auth_jwks_refresh_ratio:rate5m) > 0.0144
+            and
+            (1 - slo:auth_jwks_refresh_ratio:rate1h) > 0.0144
+          for: 5m
+          labels:
+            severity: ticket
+            slo: auth_jwks
+            service: auth
+          annotations:
+            summary: "[ticket] JWKS refresh failing — auth degradation imminent"
+            description: "캐시 TTL 만료 후 인증 모두 5xx 가 될 위험. JWKS endpoint 확인."
+
+    # ── 외부 의존성 / 인프라 게이트 (page 직결) ─────────────────────────
+    - name: agentoe.alerts.dependencies
+      rules:
+        - alert: CircuitBreakerOpen
+          # Helm chart 에서 노출하는 게이지: 0=CLOSED 1=HALF_OPEN 2=OPEN
+          expr: max by (service) (agentoe_circuit_breaker_state) >= 2
+          for: 1m
+          labels:
+            severity: page
+            service: "{{ $labels.service }}"
+          annotations:
+            summary: "[page] Circuit breaker OPEN — {{ $labels.service }}"
+
+        - alert: WSDropsBurst
+          expr: |
+            sum by (tenant) (rate(agentoe_ws_drops_total[5m])) > 5
+          for: 3m
+          labels:
+            severity: ticket
+            service: backend
+          annotations:
+            summary: "[ticket] WS back-pressure drops sustained (>5 ev/s, 5m, tenant={{ $labels.tenant }})"
+
+        - alert: LLMQuotaRejectsBurst
+          expr: |
+            sum(rate(agentoe_llm_quota_checks_total{result="reject"}[10m])) > 1
+          for: 10m
+          labels:
+            severity: ticket
+            service: agentic
+          annotations:
+            summary: "[ticket] LLM quota rejections sustained — tenant 초과 임박"
+            runbook_url: "https://github.com/agentoe/agentoe/blob/main/docs/runbook/llm-quota-exceeded.md"

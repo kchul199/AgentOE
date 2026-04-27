@@ -1,0 +1,254 @@
+# ──────────────────────────────────────────────────────────────────────────
+# agentoe-vbgw — Voice Bridge Gateway
+#
+# 핵심 차이점 vs backend:
+#   1) gRPC + WS 두 포트 노출 → L4 (NLB) 라우팅, ALB 미사용
+#   2) 통화당 connection 이 분 단위 long-lived → PDB/drain 더 보수적
+#   3) HPA 는 CPU 보다 활성 통화 수 (custom metric) 선호
+#   4) Headless Service 옵션 — 클라이언트가 sticky session 으로 특정 Pod 고정 가능
+# ──────────────────────────────────────────────────────────────────────────
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: REPLACE_ECR/agentoe-staging/vbgw
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# ── 레플리카 ─────────────────────────────────────────────────────────────
+replicaCount: 3
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    # 통화 끊김 절대 안 됨 → 한 번에 하나씩만, surge 0 (총 Pod 수 절대 안 늘림)
+    maxSurge: 1
+    maxUnavailable: 0
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: agentoe-vbgw
+
+affinity: {}
+nodeSelector: {}
+tolerations: []
+
+# ── 포트 ─────────────────────────────────────────────────────────────────
+container:
+  grpcPort: 50051
+  wsPort: 50052
+  metricsPort: 9100
+  healthPort: 8080
+
+# ── Probes ───────────────────────────────────────────────────────────────
+# gRPC health check 는 grpc-health-probe 또는 HTTP /healthz 사이드포트.
+livenessProbe:
+  httpGet:
+    path: /healthz/live
+    port: health
+  initialDelaySeconds: 20
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz/ready
+    port: health
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /healthz/live
+    port: health
+  initialDelaySeconds: 5
+  periodSeconds: 3
+  timeoutSeconds: 3
+  failureThreshold: 60   # 콜드 부팅 코덱 로딩 등 여유
+
+# ── Lifecycle ────────────────────────────────────────────────────────────
+# 통화 평균 길이 + drain buffer.
+# preStop 시 readiness 503 → 신규 통화 차단 → 기존 통화 자연 종료 대기.
+terminationGracePeriodSeconds: 600
+lifecycle:
+  preStop:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          # readiness off
+          curl -X POST -s http://localhost:8080/healthz/drain || true
+          # active call 모두 끝날 때까지 polling (max 9 분)
+          i=0
+          while [ "$i" -lt 540 ]; do
+            n=$(curl -s http://localhost:8080/healthz/active_calls || echo 0)
+            if [ "$n" = "0" ]; then exit 0; fi
+            sleep 1
+            i=$((i+1))
+          done
+
+# ── Resources ────────────────────────────────────────────────────────────
+# 코덱(opus/g711) 변환 + 멀티 동시 통화로 CPU 보수적 할당.
+resources:
+  requests:
+    cpu: 1
+    memory: 2Gi
+  limits:
+    cpu: 4
+    memory: 4Gi
+
+# ── HPA ──────────────────────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 50
+  targetCPUUtilizationPercentage: 55
+  customMetrics:
+    enabled: false                  # Prometheus Adapter 준비 후 켜기
+    activeCallsPerPod: 30
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600   # 통화 끊김 고려 매우 보수적
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 30
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+      selectPolicy: Max
+
+# ── PDB ──────────────────────────────────────────────────────────────────
+pdb:
+  enabled: true
+  # backend 보다 보수적 — 음성 SLA 고려.
+  minAvailable: "67%"
+
+# ── Service ─────────────────────────────────────────────────────────────
+# 외부 SIP/RTP 가 직접 도달해야 하면 NLB; backend 에서만 호출하면 ClusterIP.
+service:
+  type: ClusterIP
+  annotations: {}
+  # Pod IP 직접 노출하고 싶을 때 (gRPC client side LB).
+  headless:
+    enabled: false
+  ports:
+    grpc: 50051
+    ws: 50052
+
+# 외부 NLB 노출 (선택). SIP signaling 이 외부에서 들어오면 활성화.
+externalService:
+  enabled: false
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    # 음성 트래픽 idle 짧게 유지 — RTP keepalive 가 끊기면 안 됨.
+    service.beta.kubernetes.io/aws-load-balancer-attributes: |
+      idle_timeout.timeout_seconds=350,
+      load_balancing.cross_zone.enabled=true
+
+# ── ServiceAccount ──────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: false
+
+# ── Security ─────────────────────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+extraVolumes:
+  - name: tmp
+    emptyDir: {}
+extraVolumeMounts:
+  - name: tmp
+    mountPath: /tmp
+
+# ── Config ───────────────────────────────────────────────────────────────
+config:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  GRPC_PORT: "50051"
+  WS_PORT: "50052"
+  METRICS_PORT: "9100"
+  HEALTH_PORT: "8080"
+  # 코덱 / 음성 파라미터
+  AUDIO_SAMPLE_RATE: "16000"
+  AUDIO_CHUNK_MS: "20"
+  STT_PROVIDER: "google"
+  TTS_PROVIDER: "google"
+  # 백엔드 connection
+  BACKEND_HTTP_URL: "http://agentoe-backend.agentoe.svc.cluster.local"
+  BACKEND_WS_URL: "ws://agentoe-backend.agentoe.svc.cluster.local/api/v1/ws"
+  # max concurrent calls per pod — pod 메모리/CPU 한계 기반.
+  MAX_CONCURRENT_CALLS: "50"
+
+# ── External Secrets ────────────────────────────────────────────────────
+externalSecrets:
+  enabled: true
+  refreshInterval: "1h"
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: ClusterSecretStore
+  secretsPrefix: "agentoe/staging"
+  data:
+    - remoteKey: "google_application_credentials"
+      secretKey: "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+    - remoteKey: "vbgw_internal_token"
+      secretKey: "VBGW_INTERNAL_TOKEN"
+
+# ── ServiceMonitor ──────────────────────────────────────────────────────
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  scrapeTimeout: 10s
+  path: /metrics
+  port: metrics
+  labels:
+    release: kube-prometheus-stack
+
+# ── NetworkPolicy ───────────────────────────────────────────────────────
+networkPolicy:
+  enabled: false
+  ingress:
+    fromBackendNamespace: "agentoe"
+    fromMonitoringNamespace: "monitoring"
+
+extraEnv: []
+extraEnvFrom: []
+
+priorityClassName: ""

@@ -1,0 +1,64 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentoe-backend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentoe-backend.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "agentoe-backend.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # ALB target-type=ip 모드에서는 ALB 가 Pod IP 로 직접 도달 — VPC CIDR 허용 필요.
+    # 또는 ingress-nginx NS 에서 들어오는 트래픽 허용.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.fromIngressNamespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.fromMonitoringNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.container.port }}
+    {{- if and .Values.container.grpcEnabled .Values.networkPolicy.ingress.fromVbgwNamespace }}
+    # vbgw bridge → backend gRPC. 별도 namespace 의 vbgw-bridge 만 허용.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.fromVbgwNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.container.grpcPort }}
+    {{- end }}
+  egress:
+    # DNS — kube-system 의 CoreDNS.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # 그 외 외부 (Atlas / ElastiCache / Groq / Google) — Cilium L7 정책으로 정밀 통제 권장.
+    # 여기선 모든 외부 egress 허용 (포트 443 / Redis 6379).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32   # IMDS 차단 (IRSA 만 통해서 STS 호출)
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 27017
+{{- end }}

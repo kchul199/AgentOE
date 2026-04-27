@@ -1,0 +1,42 @@
+────────────────────────────────────────────────────────────────────
+ agentoe-vbgw  v{{ .Chart.AppVersion }}  (release: {{ .Release.Name }})
+────────────────────────────────────────────────────────────────────
+
+1. Pod / 롤아웃 확인
+   kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "agentoe-vbgw.fullname" . }} --timeout=300s
+
+2. Health
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agentoe-vbgw.fullname" . }} 18080:{{ .Values.container.healthPort }} &
+   curl -s http://localhost:18080/healthz/live
+   curl -s http://localhost:18080/healthz/ready
+   curl -s http://localhost:18080/healthz/active_calls
+
+3. gRPC 도달성
+   kubectl -n {{ .Release.Namespace }} run grpc-test --rm -it --image=fullstorydev/grpcurl \
+     --restart=Never --command -- \
+     grpcurl -plaintext {{ include "agentoe-vbgw.fullname" . }}:{{ .Values.service.ports.grpc }} list
+
+{{- if .Values.externalService.enabled }}
+
+4. NLB hostname
+   kubectl -n {{ .Release.Namespace }} get svc {{ include "agentoe-vbgw.fullname" . }}-external -o wide
+   # EXTERNAL-IP 컬럼에 NLB hostname 노출까지 1~2 분 대기.
+{{- end }}
+
+5. HPA / PDB
+{{- if .Values.autoscaling.enabled }}
+   kubectl -n {{ .Release.Namespace }} get hpa {{ include "agentoe-vbgw.fullname" . }}
+{{- end }}
+{{- if .Values.pdb.enabled }}
+   kubectl -n {{ .Release.Namespace }} get pdb {{ include "agentoe-vbgw.fullname" . }}
+{{- end }}
+
+────────────────────────────────────────────────────────────────────
+ 운영 포인트
+────────────────────────────────────────────────────────────────────
+  · terminationGracePeriodSeconds = {{ .Values.terminationGracePeriodSeconds }}s
+    → 통화 평균 길이 + drain buffer 고려한 값. 노드 drain 시 PDB 와 함께 통화 안전.
+  · maxConcurrentCalls per Pod = {{ index .Values.config "MAX_CONCURRENT_CALLS" }}
+    → 코덱 변환 비용 측정 후 조정 필요. 초과 시 신규 통화 거부 + 새 Pod scale-up 트리거.
+  · gRPC client-side LB: 클라이언트 stub 에서 `dns:///<svc>:50051` round-robin 권장.
+────────────────────────────────────────────────────────────────────

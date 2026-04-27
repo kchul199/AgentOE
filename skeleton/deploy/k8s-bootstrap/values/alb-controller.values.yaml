@@ -1,0 +1,48 @@
+# AWS Load Balancer Controller — production values
+# 1.7.x 이상에서는 IngressClass / TargetGroupBinding 등 CRD 도 설치됨.
+
+# clusterName / SA role-arn 은 Makefile 에서 --set 으로 주입.
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller
+
+# 컨트롤러 자체는 system 노드에만.
+nodeSelector:
+  node-pool: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 200Mi
+  limits:
+    cpu: 500m
+    memory: 500Mi
+
+# leader-election 안정. 5초 lease 만으로 충분.
+leaderElection:
+  enabled: true
+
+# webhook 인증서는 cert-manager 와 충돌 가능 → 자체 발급.
+webhookTLS:
+  selfSigned: true
+
+# Prometheus scrape (kube-prometheus-stack 이 잡음)
+serviceMonitor:
+  enabled: true
+  namespace: kube-system
+
+# ALB 가 자동으로 만드는 SG 에 prefix 부여 — 비용/추적 용이.
+defaultTags:
+  Project: agentoe
+  ManagedBy: aws-load-balancer-controller
+
+# Ingress 가 명시 안 해도 기본 어노테이션 부여 (production 기본값).
+ingressClassParams:
+  spec:
+    scheme: internet-facing
+    ipAddressType: ipv4

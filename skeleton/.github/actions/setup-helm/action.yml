@@ -1,0 +1,34 @@
+name: "Setup Helm + plugins"
+description: "Helm 바이너리 + helm-diff plugin 을 캐시 친화적으로 설치한다."
+
+inputs:
+  helm-version:
+    description: "Helm 버전 (helm/Chart.yaml kubeVersion 과 호환)"
+    required: false
+    default: "v3.14.4"
+  install-diff-plugin:
+    description: "helm-diff plugin 설치 여부"
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: ${{ inputs.helm-version }}
+
+    - name: Install helm-diff plugin
+      if: inputs.install-diff-plugin == 'true'
+      shell: bash
+      run: |
+        if helm plugin list | grep -q '^diff'; then
+          echo "helm-diff already present"
+        else
+          helm plugin install https://github.com/databus23/helm-diff
+        fi
+
+    - name: Show helm version
+      shell: bash
+      run: helm version

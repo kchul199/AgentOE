@@ -84,7 +84,11 @@ services:
           -u admin -p $${MONGO_ROOT_PASSWORD:-agentoe_dev_pass} \
           --authenticationDatabase admin \
           /mongo-scripts/init_schema.js
-        echo 'Schema initialization done'
+        mongosh --host mongo-primary:27017 \
+          -u admin -p $${MONGO_ROOT_PASSWORD:-agentoe_dev_pass} \
+          --authenticationDatabase admin \
+          /mongo-scripts/create_audit_role.js
+        echo 'Schema + audit role initialization done'
     restart: "no"
 
   # ── Redis ────────────────────────────────────────────────────────────────
@@ -136,8 +140,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
     networks:
       - agentoe-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   # ── Nginx (API Gateway) ──────────────────────────────────────────────────

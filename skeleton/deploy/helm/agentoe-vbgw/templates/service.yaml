@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentoe-vbgw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentoe-vbgw.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if .Values.service.headless.enabled }}
+  clusterIP: None
+  {{- end }}
+  ports:
+    - name: grpc
+      port: {{ .Values.service.ports.grpc }}
+      targetPort: grpc
+      protocol: TCP
+    - name: ws
+      port: {{ .Values.service.ports.ws }}
+      targetPort: ws
+      protocol: TCP
+    - name: metrics
+      port: {{ .Values.container.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "agentoe-vbgw.selectorLabels" . | nindent 4 }}
+{{- if .Values.externalService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentoe-vbgw.fullname" . }}-external
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentoe-vbgw.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.externalService.annotations | nindent 4 }}
+spec:
+  type: {{ .Values.externalService.type }}
+  # NLB 는 externalTrafficPolicy=Local 이 client IP 보존 + 같은 노드 Pod 만 라우팅 → 균형 깨질 수 있음.
+  # gRPC 는 client-side LB 가 일반적이라 Cluster 모드 OK.
+  externalTrafficPolicy: Cluster
+  ports:
+    - name: grpc
+      port: {{ .Values.service.ports.grpc }}
+      targetPort: grpc
+      protocol: TCP
+    - name: ws
+      port: {{ .Values.service.ports.ws }}
+      targetPort: ws
+      protocol: TCP
+  selector:
+    {{- include "agentoe-vbgw.selectorLabels" . | nindent 4 }}
+{{- end }}

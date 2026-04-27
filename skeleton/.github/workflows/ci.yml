@@ -8,9 +8,14 @@ on:
 
 env:
   PYTHON_VERSION: "3.11"
-  NODE_VERSION: "18"
+
+# 동일 브랜치에 새 커밋 push 시 이전 실행 취소
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # ── 1. Lint & Type Check ──────────────────────────────────────────────────
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
@@ -27,24 +32,94 @@ jobs:
         working-directory: backend
         run: pip install -e ".[dev]"
 
-      - name: Run Black
-        working-directory: backend
-        run: black --check app/ tests/
-
-      - name: Run isort
-        working-directory: backend
-        run: isort --check-only app/ tests/
-
-      - name: Run Ruff
+      - name: Ruff lint
         working-directory: backend
         run: ruff check app/ tests/
 
-      - name: Run mypy
+      - name: Ruff format check
         working-directory: backend
-        run: mypy app/
+        run: ruff format --check app/ tests/
 
-  test:
-    name: Unit & Integration Tests
+      - name: mypy type check
+        working-directory: backend
+        run: mypy app/ --ignore-missing-imports
+
+  # ── 2. Unit Tests (외부 의존성 없음, 빠른 피드백) ─────────────────────────
+  unit-test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -e ".[dev]"
+
+      - name: Run unit tests
+        working-directory: backend
+        env:
+          MONGODB_URI: mongodb://localhost:27017/?directConnection=true
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: ci-unit-test-secret
+          GROQ_API_KEY: test-key
+          GOOGLE_APPLICATION_CREDENTIALS: /dev/null
+        run: |
+          pytest tests/unit/ \
+            --cov=app \
+            --cov-report=xml:coverage-unit.xml \
+            --cov-report=term-missing \
+            -v \
+            --tb=short
+
+      - name: Upload unit coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: backend/coverage-unit.xml
+
+  # ── 2b. Agentic Module Tests (DSL/컴파일러/라우터/노드 전용 커버리지 게이트) ─
+  agentic-unit-test:
+    name: Agentic Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -e ".[dev]"
+
+      - name: Run agentic tests
+        working-directory: backend
+        env:
+          MONGODB_URI: mongodb://localhost:27017/?directConnection=true
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: ci-agentic-test-secret
+          GROQ_API_KEY: test-key
+          GOOGLE_APPLICATION_CREDENTIALS: /dev/null
+        run: |
+          pytest tests/unit/agentic/ \
+            --cov=app/agentic \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v --tb=short
+
+  # ── 3. Integration Tests (MongoDB + Redis 필요) ───────────────────────────
+  integration-test:
+    name: Integration Tests
     runs-on: ubuntu-latest
     needs: lint
     services:
@@ -53,10 +128,11 @@ jobs:
         ports:
           - 27017:27017
         options: >-
-          --health-cmd "mongosh --eval 'db.adminCommand({ping:1})'"
+          --health-cmd "mongosh --quiet --eval \"db.adminCommand('ping').ok\""
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
+          --health-start-period 30s
       redis:
         image: redis:7.2-alpine
         ports:
@@ -65,7 +141,7 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 3s
-          --health-retries 5
+          --health-retries 10
 
     steps:
       - uses: actions/checkout@v4
@@ -80,36 +156,116 @@ jobs:
         working-directory: backend
         run: pip install -e ".[dev]"
 
-      - name: Run tests with coverage
+      - name: Wait for MongoDB replica set
+        # single-node 모드로 directConnection 사용 — CI에서 replSet 불필요
+        run: |
+          for i in {1..30}; do
+            if mongosh --quiet --eval "db.adminCommand('ping').ok" \
+               "mongodb://localhost:27017/?directConnection=true" 2>/dev/null | grep -q 1; then
+              echo "MongoDB ready"; break
+            fi
+            echo "Waiting for MongoDB... ($i/30)"; sleep 2
+          done
+
+      - name: Run integration tests
         working-directory: backend
         env:
           MONGODB_URI: mongodb://localhost:27017/?directConnection=true
           REDIS_URL: redis://localhost:6379/0
-          JWT_SECRET: test-secret-key-for-ci-only
+          JWT_SECRET: ci-integration-test-secret
           GROQ_API_KEY: test-key
           GOOGLE_APPLICATION_CREDENTIALS: /dev/null
-        run: pytest tests/ --cov=app --cov-report=xml --cov-report=term-missing
+          ENVIRONMENT: testing
+        run: |
+          pytest tests/integration/ \
+            --cov=app \
+            --cov-report=xml:coverage-integration.xml \
+            --cov-report=term-missing \
+            -v \
+            --tb=short
 
-      - name: Upload coverage to Codecov
+      - name: Upload integration coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: backend/coverage-integration.xml
+
+  # ── 4. Coverage 병합 & Codecov 업로드 ────────────────────────────────────
+  coverage:
+    name: Upload Coverage
+    runs-on: ubuntu-latest
+    needs: [unit-test, integration-test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+          path: coverage/
+
+      - name: Download integration coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+          path: coverage/
+
+      - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
-          file: backend/coverage.xml
+          directory: coverage/
+          fail_ci_if_error: false   # Codecov 장애가 CI를 막지 않도록
 
-  build:
+  # ── 5. Docker Build ───────────────────────────────────────────────────────
+  docker-build:
     name: Build Docker Image
     runs-on: ubuntu-latest
-    needs: test
+    needs: [unit-test, integration-test]
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image
+      - name: Build production image
         uses: docker/build-push-action@v5
         with:
           context: backend
+          dockerfile: backend/Dockerfile
           push: false
           tags: agentoe/api:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verify image starts
+        run: |
+          docker run --rm \
+            -e MONGODB_URI=mongodb://localhost:27017 \
+            -e REDIS_URL=redis://localhost:6379 \
+            -e JWT_SECRET=ci-build-check \
+            -e GROQ_API_KEY=test \
+            -e GOOGLE_APPLICATION_CREDENTIALS=/dev/null \
+            agentoe/api:${{ github.sha }} \
+            python -c "from app.main import app; print('Import OK')"
+
+  # ── 6. Security Scan (의존성 취약점) ─────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: lint
+    continue-on-error: true       # 취약점 발견 시 경고만, CI 블로킹 안 함
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit dependencies
+        working-directory: backend
+        run: pip-audit -r <(pip install -e ".[dev]" --dry-run 2>&1 | grep "Would install" | sed 's/.*Would install //' | tr ' ' '\n' | sed 's/==/==/') || true

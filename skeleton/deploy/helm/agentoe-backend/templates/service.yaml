@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentoe-backend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentoe-backend.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  # ALB target-type=ip 모드에선 Pod IP 로 직접 라우팅 → kube-proxy 우회.
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+    {{- if .Values.container.grpcEnabled }}
+    # vbgw bridge → backend gRPC. 같은 클러스터 내부 트래픽만 — ALB 미경유.
+    - name: grpc
+      port: {{ .Values.container.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc
+    {{- end }}
+  selector:
+    {{- include "agentoe-backend.selectorLabels" . | nindent 4 }}
