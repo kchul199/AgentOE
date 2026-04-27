@@ -1,0 +1,75 @@
+groups:
+  - name: vbgw_critical
+    rules:
+      # ESL 연결 단절 — 모든 통화 생성/제어 불가
+      - alert: ESLConnectionLost
+        expr: vbgw_esl_connected == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ESL 연결 끊김 ({{ $labels.instance }})"
+          description: "FreeSWITCH ESL TCP 연결이 1분 이상 단절되어 있습니다. 통화 생성 및 제어가 불가능합니다."
+
+      # SIP 게이트웨이 등록 해제 — 인바운드/아웃바운드 전화 수신 불가
+      - alert: SIPRegistrationLost
+        expr: vbgw_sip_registered == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SIP 게이트웨이 미등록 ({{ $labels.instance }})"
+          description: "PBX SIP 게이트웨이가 3분 이상 REGED 상태가 아닙니다. 모든 아웃바운드 콜이 실패합니다."
+
+  - name: vbgw_warning
+    rules:
+      # 세션 용량 90% 이상 도달
+      - alert: SessionCapacityHigh
+        expr: vbgw_active_calls / vbgw_max_sessions > 0.9
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "세션 용량 90% 초과 ({{ $labels.instance }})"
+          description: "현재 활성 통화 수가 최대 용량의 90%를 초과했습니다. 스케일아웃 또는 트래픽 조절이 필요합니다."
+
+      # 아웃바운드 콜 거절률 급증
+      - alert: OutboundRejectRateHigh
+        expr: rate(vbgw_api_outbound_rejected_total[5m]) / rate(vbgw_api_outbound_requests_total[5m]) > 0.3
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "아웃바운드 콜 거절률 30% 초과 ({{ $labels.instance }})"
+          description: "최근 5분간 아웃바운드 콜 요청의 30% 이상이 용량 초과로 거절되고 있습니다."
+
+      # 비정상 종료 원인 급증 (네트워크 에러 등)
+      - alert: AbnormalHangupSpike
+        expr: rate(vbgw_call_hangup_total{hangup_cause!~"NORMAL_CLEARING|ORIGINATOR_CANCEL|NO_ANSWER"}[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "비정상 종료 급증 ({{ $labels.instance }})"
+          description: "정상 종료가 아닌 Hangup Cause가 분당 1건 이상 발생하고 있습니다. 네트워크 또는 SIP 트렁크 상태를 확인하십시오."
+
+  - name: vbgw_info
+    rules:
+      # HTTP API 지연 증가
+      - alert: APILatencyHigh
+        expr: histogram_quantile(0.95, rate(vbgw_http_request_duration_seconds_bucket[5m])) > 0.5
+        for: 3m
+        labels:
+          severity: info
+        annotations:
+          summary: "API P95 레이턴시 500ms 초과 ({{ $labels.instance }})"
+          description: "Orchestrator HTTP API의 P95 응답 시간이 500ms를 초과했습니다. Redis 또는 ESL 부하를 확인하십시오."
+
+      # SIP 등록 알람 지속
+      - alert: SIPRegistrationAlarmActive
+        expr: vbgw_sip_registration_alarm == 1
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "SIP 등록 알람 활성화 상태 ({{ $labels.instance }})"

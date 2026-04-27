@@ -1,0 +1,29 @@
+<configuration name="callcenter.conf" description="CallCenter">
+  <settings>
+    <!-- 상담원 상태 이벤트 수신 활성화 -->
+    <param name="agent-no-answer-delay-resend" value="10"/>
+  </settings>
+
+  <queues>
+    <!-- AI-to-Human 전환 전용 큐 -->
+    <queue name="ai_support_queue">
+      <param name="strategy" value="longest-idle-agent"/>
+      <param name="moh-sound" value="$${hold_music}"/>
+      <param name="time-base-score" value="system"/>
+      <param name="max-wait-time" value="0"/>
+      <param name="max-wait-time-with-no-agent" value="30"/>
+      <param name="tier-rules-apply" value="false"/>
+      <param name="abandoned-resume-allowed" value="false"/>
+      <param name="discard-abandoned-after" value="60"/>
+    </queue>
+  </queues>
+
+  <!-- 초기 상담원 설정 (예시) -->
+  <agents>
+    <!-- <agent name="agent01@default" type="callback" contact="[leg_timeout=10]user/agent01" status="Available" max-no-answer="3" wrap-up-time="10" reject-delay-time="10" busy-delay-time="60" /> -->
+  </agents>
+
+  <tiers>
+    <!-- <tier agent="agent01@default" queue="ai_support_queue" level="1" position="1" /> -->
+  </tiers>
+</configuration>

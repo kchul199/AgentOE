@@ -1,0 +1,49 @@
+# Default values for vbgw.
+
+orchestrator:
+  replicaCount: 2
+  image:
+    repository: your-registry/vbgw-orchestrator
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"
+  service:
+    type: ClusterIP
+    port: 8080
+  canary:
+    enabled: false
+    weight: 10 # 10% traffic to canary if enabled
+
+bridge:
+  replicaCount: 1
+  image:
+    repository: your-registry/vbgw-bridge
+    tag: "latest"
+
+freeswitch:
+  replicaCount: 1
+  image:
+    repository: signalwire/freeswitch
+    tag: "1.10.12"
+  service:
+    type: LoadBalancer # Expose SIP
+    sipPort: 5060
+
+redis:
+  deploy: false # Set true to deploy mini-redis, false to use external ElastiCache
+  host: "redis-master.default.svc.cluster.local"
+
+ingress:
+  enabled: true
+  className: "nginx"
+  hosts:
+    - host: api.vbgw.internal
+      paths:
+        - path: /
+          pathType: ImplementationSpecific

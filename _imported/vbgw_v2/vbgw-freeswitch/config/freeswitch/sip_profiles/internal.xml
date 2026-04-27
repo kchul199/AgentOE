@@ -1,0 +1,107 @@
+<!--
+  internal.xml — Sofia SIP Profile
+  변경이력: v1.0.0 | 2026-04-07 | [Implementer] | 최초 생성
+  변경이력: v1.1.0 | 2026-04-07 | [Implementer] | Q-02 settings 래퍼 추가
+  변경이력: v1.2.0 | 2026-04-07 | [Implementer] | Q-10 ping 조건부 가이드
+-->
+<profile name="internal">
+  <settings>
+    <!-- SIP Ports -->
+    <param name="sip-port" value="$${sip_port}"/>
+    <param name="tls-port" value="$${sip_tls_port}"/>
+
+    <!-- Security -->
+    <param name="tls-only" value="$${sip_tls_only}"/>
+    <param name="tls-cert-dir" value="$${sip_tls_cert_dir}"/>
+    <param name="rtp-secure-media" value="$${srtp_mode}"/>
+    <!-- P-14: SRTP key exchange — SDES (most common for PBX/SBC interop) -->
+    <param name="rtp-secure-media-suites" value="AEAD_AES_256_GCM_8,AEAD_AES_128_GCM_8,AES_CM_256_HMAC_SHA1_80,AES_CM_128_HMAC_SHA1_80"/>
+
+    <!-- NAT Traversal -->
+    <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
+    <param name="ext-sip-ip" value="$${external_sip_ip}"/>
+    <param name="stun-enabled" value="$${stun_enabled}"/>
+    <param name="stun-auto-disable" value="true"/>
+
+    <!-- S-05: TCP/TLS keepalive (prevents NAT/firewall session timeout) -->
+    <param name="tcp-keepalive" value="60"/>
+    <param name="tls-keepalive" value="60"/>
+
+    <!-- PRACK & Session Timer -->
+    <param name="enable-100rel" value="$${prack_enabled}"/>
+    <param name="enable-timer" value="$${session_timer_enabled}"/>
+    <param name="session-timeout" value="$${session_timeout}"/>
+    <param name="minimum-session-expires" value="$${min_se}"/>
+
+    <!-- DTMF -->
+    <param name="dtmf-type" value="rfc2833"/>
+    <param name="rfc2833-pt" value="101"/>
+    <param name="dtmf-duration" value="2000"/>
+    <!-- In-band DTMF detection fallback (PBX가 RFC 2833 미지원 시) -->
+    <param name="liberal-dtmf" value="true"/>
+
+    <!-- Codec Priority (P-05: env-configurable, default G.711 first for PBX compat) -->
+    <param name="inbound-codec-prefs" value="$${inbound_codec_prefs}"/>
+    <param name="outbound-codec-prefs" value="$${outbound_codec_prefs}"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+
+    <!-- RTP -->
+    <param name="rtp-start-port" value="$${rtp_start_port}"/>
+    <param name="rtp-end-port" value="$${rtp_end_port}"/>
+
+    <!-- Jitter Buffer -->
+    <param name="jitter-buffer-ms" value="$${jb_init}:$${jb_min}:$${jb_max}"/>
+
+    <!-- RTP Timeout (ghost call prevention) -->
+    <param name="rtp-timeout-sec" value="30"/>
+    <param name="rtp-hold-timeout-sec" value="60"/>
+
+    <!-- Sofia max-sessions (SIP-level 503 rejection when at capacity) -->
+    <param name="max-sessions" value="110"/>
+
+    <!-- T-07: REFER/REPLACES — disabled by default to prevent call hijacking.
+         Transfer is controlled via Orchestrator ESL commands instead. -->
+    <param name="accept-blind-transfer" value="false"/>
+
+    <!-- T-15: SIP-level DoS protection — limit inbound INVITE rate -->
+    <param name="calls-per-second" value="30"/>
+    <param name="sip-options-respond-503-on-busy" value="true"/>
+
+    <!-- FS-1: SIP ACL — restrict inbound INVITE to PBX/SBC IPs only -->
+    <param name="apply-inbound-acl" value="pbx-acl"/>
+
+    <!-- SIP User-Agent header (stripped of FS name for security — L-01) -->
+    <param name="user-agent-string" value="VBGW/1.0"/>
+  </settings>
+
+  <!-- P-11: Multi-gateway with failover (primary + standby PBX) -->
+  <gateways>
+    <gateway name="pbx-main">
+      <param name="username" value="$${pbx_username}"/>
+      <param name="password" value="$${pbx_password}"/>
+      <param name="proxy" value="$${pbx_host}"/>
+      <param name="register" value="$${pbx_register}"/>
+      <param name="retry-seconds" value="30"/>
+      <param name="expire-seconds" value="3600"/>
+      <!--
+        Q-10: SIP OPTIONS ping for gateway health detection
+        주의: register=true와 함께 사용 시 일부 PBX에서 중복 등록 이슈 가능
+        register=true인 경우 ping을 비활성화하거나 간격을 60초 이상으로 설정 권장
+      -->
+      <param name="ping" value="25"/>
+      <param name="ping-max" value="3"/>
+      <param name="ping-min" value="1"/>
+    </gateway>
+    <gateway name="pbx-standby">
+      <param name="username" value="$${pbx_standby_username}"/>
+      <param name="password" value="$${pbx_standby_password}"/>
+      <param name="proxy" value="$${pbx_standby_host}"/>
+      <param name="register" value="$${pbx_standby_register}"/>
+      <param name="retry-seconds" value="30"/>
+      <param name="expire-seconds" value="3600"/>
+      <param name="ping" value="25"/>
+      <param name="ping-max" value="3"/>
+      <param name="ping-min" value="1"/>
+    </gateway>
+  </gateways>
+</profile>

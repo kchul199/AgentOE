@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package voicebot.ai;
+
+option go_package = "vbgw-ai/proto/voicebot";
+
+// [L-4 Fix] C++ Arena Allocation 최적화 — protobuf 객체 힙 할당 횟수 감소
+option cc_enable_arenas = true;
+
+
+// 통화 세션 중 AI 엔진과 실시간(Real-time)으로 통신하기 위한 양방향 스트리밍 서비스
+service VoicebotAiService {
+    rpc StreamSession(stream AudioChunk) returns (stream AiResponse);
+}
+
+// 1. Gateway -> AI Engine (고객 발화를 전달)
+message AudioChunk {
+    string session_id = 1;     // SIP Call ID
+    bytes audio_data = 2;      // 16kHz PCM 바이너리 (20ms)
+    bool is_speaking = 3;      // VAD 감지 상태 (True: 고객이 말하는 중)
+    string dtmf_digit = 4;     // [IVR] DTMF 단일 문자 ('0'-'9', '*', '#'). 비어 있으면 음성 프레임
+}
+
+// 2. AI Engine -> Gateway (STT 텍스트 결과 또는 TTS 음성을 전달)
+message AiResponse {
+    enum ResponseType {
+        STT_RESULT = 0;        // 실시간 음성인식(STT) 중간/최종 텍스트
+        TTS_AUDIO = 1;         // 봇의 대답 (16kHz PCM 오디오 스트림)
+        END_OF_TURN = 2;       // 봇의 발화가 모두 끝났음을 알림
+    }
+    
+    ResponseType type = 1;
+    string text_content = 2;   // STT 인식 결과 또는 TTS 생성 원시 텍스트
+    bytes audio_data = 3;      // 16kHz PCM 바이너리 (Gateway가 재생해야 할 음성)
+    bool clear_buffer = 4;     // Barge-in 발생 시 기존 재생 중이던 오디오를 중단(플러시)하라는 플래그
+}

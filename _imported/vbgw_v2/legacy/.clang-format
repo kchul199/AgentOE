@@ -1,0 +1,114 @@
+# vbgw C++ 코드 스타일 설정
+# clang-format 버전: 14+
+# 적용 대상: src/**/*.cpp, src/**/*.h
+
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# ── 기본 레이아웃 ──────────────────────────────────────────
+Standard: c++20
+ColumnLimit: 100
+TabWidth: 4
+IndentWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+
+# ── 중괄호 스타일 (Allman 변형 — 함수는 새 줄, 제어문은 같은 줄) ──
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: false
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: false
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: false
+  BeforeElse: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+
+# ── 들여쓰기 ─────────────────────────────────────────────
+IndentCaseLabels: true
+IndentPPDirectives: BeforeHash
+NamespaceIndentation: None
+AccessModifierOffset: -4
+
+# ── 공백 설정 ────────────────────────────────────────────
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: true
+SpaceBeforeInheritanceColon: true
+SpaceBeforeParens: ControlStatements
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 2
+SpacesInAngles: false
+SpacesInContainerLiterals: false
+SpacesInCStyleCastParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# ── 포인터/레퍼런스 정렬 (타입에 붙이기) ────────────────────
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# ── 줄 바꿈 설정 ─────────────────────────────────────────
+AlwaysBreakAfterReturnType: None
+AlwaysBreakBeforeMultilineStrings: false
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList: BeforeColon
+BreakStringLiterals: true
+
+# ── 정렬 설정 ────────────────────────────────────────────
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Left
+AlignOperands: true
+AlignTrailingComments: true
+
+# ── 짧은 구문 한 줄 허용 ─────────────────────────────────
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: false
+
+# ── include 정렬 ─────────────────────────────────────────
+IncludeBlocks: Regroup
+IncludeCategories:
+  # 1순위: 연관 헤더 (같은 이름의 .h)
+  - Regex: '^".*\.h"'
+    Priority: 1
+  # 2순위: 프로젝트 내부 헤더
+  - Regex: '^"(engine|ai|utils)/'
+    Priority: 2
+  # 3순위: 생성된 protobuf 헤더
+  - Regex: '^".*\.pb\.h"'
+    Priority: 3
+  # 4순위: 외부 라이브러리 헤더
+  - Regex: '^<(pj|grpc|google|boost|onnxruntime|spdlog).*>'
+    Priority: 4
+  # 5순위: C++ 표준 라이브러리
+  - Regex: '^<[a-z_]+>'
+    Priority: 5
+SortIncludes: CaseSensitive
+
+# ── 기타 ─────────────────────────────────────────────────
+Cpp11BracedListStyle: true
+DerivePointerAlignment: false
+FixNamespaceComments: true
+ReflowComments: true
+SortUsingDeclarations: true
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false

@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vbgw.fullname" . }}-orchestrator
+spec:
+  type: {{ .Values.orchestrator.service.type }}
+  ports:
+    - port: {{ .Values.orchestrator.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: orchestrator
+---
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vbgw.fullname" . }}-ingress
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.ingress.className }}
+    # Active NGINX Canary Annotations
+    {{- if .Values.orchestrator.canary.enabled }}
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "{{ .Values.orchestrator.canary.weight }}"
+    {{- end }}
+spec:
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "vbgw.fullname" $ }}-orchestrator
+                port:
+                  number: {{ $.Values.orchestrator.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

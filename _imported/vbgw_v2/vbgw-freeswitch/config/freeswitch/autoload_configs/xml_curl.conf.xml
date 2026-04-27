@@ -1,0 +1,8 @@
+<configuration name="xml_curl.conf" description="cURL XML Gateway">
+  <bindings>
+    <binding name="dialplan">
+      <!-- Route dialplan requests to the Go Orchestrator API -->
+      <param name="gateway-url" value="http://127.0.0.1:8080/api/v1/fs/dialplan" bindings="dialplan"/>
+    </binding>
+  </bindings>
+</configuration>

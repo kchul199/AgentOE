@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  # NGINX acts as the entrypoint for all Orchestrator HTTP traffic.
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: vbgw-nginx-proxy
+    restart: unless-stopped
+    ports:
+      # Exposes port 8080 (the default orchestrator port) but intercepted by NGINX
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - orchestrator-blue
+      - orchestrator-green
+
+  # Blue Instance (Stable 90%)
+  orchestrator-blue:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: vbgw-orchestrator-blue
+    restart: unless-stopped
+    environment:
+      # Must listen on 8080 internally, binding via Docker network proxy NOT host net
+      - HTTP_PORT=8080
+      - REDIS_ADDR=redis:6379
+      - ESL_HOST=${ESL_HOST:-127.0.0.1}
+      - ESL_PORT=${ESL_PORT:-8021}
+      - ESL_PASSWORD=${ESL_PASSWORD}
+    env_file:
+      - .env
+
+  # Green Instance (Canary 10%)
+  orchestrator-green:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: vbgw-orchestrator-green
+    restart: unless-stopped
+    environment:
+      - HTTP_PORT=8080
+      - REDIS_ADDR=redis:6379
+      - ESL_HOST=${ESL_HOST:-127.0.0.1}
+      - ESL_PORT=${ESL_PORT:-8021}
+      - ESL_PASSWORD=${ESL_PASSWORD}
+      # E.g. Enable experimental flags on Canary
+      - EXPERIMENTAL_ROUTING=true
+    env_file:
+      - .env
+
+  redis:
+    image: redis:7-alpine
+    container_name: vbgw-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+# Note: run alongside main docker-compose.yml, but without mapping 8080 natively in it.
