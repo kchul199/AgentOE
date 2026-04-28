@@ -1,62 +1,61 @@
-# agentoe-vbgw  ·  staging
-image:
-  repository: REPLACE_ECR_REGISTRY/agentoe-staging/vbgw
-  tag: ""
+# ──────────────────────────────────────────────────────────────────────────
+# vbgw chart  ·  staging override  (multi-deployment: orchestrator/bridge/freeswitch)
+#
+# 적용:
+#   helm upgrade --install vbgw ./deploy/helm/vbgw \
+#     -n vbgw-staging --create-namespace \
+#     -f deploy/helm/values/staging/vbgw.values.yaml
+# ──────────────────────────────────────────────────────────────────────────
 
-replicaCount: 2
-autoscaling:
-  enabled: true
-  minReplicas: 2
-  maxReplicas: 8
-  targetCPUUtilizationPercentage: 60
+orchestrator:
+  replicaCount: 2
+  image:
+    repository: REPLACE_ECR_REGISTRY/agentoe-staging/vbgw-orchestrator
+    tag: ""        # CI 가 git sha 로 설정
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+    port: 8080
 
-resources:
-  requests:
-    cpu: 500m
-    memory: 1Gi
-  limits:
-    cpu: 2
-    memory: 2Gi
+bridge:
+  replicaCount: 2
+  image:
+    repository: REPLACE_ECR_REGISTRY/agentoe-staging/vbgw-bridge
+    tag: ""
+    pullPolicy: IfNotPresent
 
-terminationGracePeriodSeconds: 300
+  # AI gRPC endpoint — Phase Y 후 AgentOE backend 가 VoicebotAiService 호스팅.
+  # cutover 진행 시 이 값을 backend service 로 변경.
+  # 현재 default: 자체 vbgw-ai (안전 기본값)
+  grpcAiAddr: "ai-service:50051"
+  grpcAiTLS: false
 
-pdb:
-  enabled: true
-  minAvailable: 1
+  # ── Canary cutover (Phase Z) — 일부 트래픽이 backend 로 ────────────
+  canary:
+    enabled: false                   # cutover 시작 시 true
+    replicaCount: 1                  # stable 9 + canary 1 = 10% canary
+    grpcAiAddr: "agentoe-backend.agentoe-staging.svc.cluster.local:50051"
+    grpcAiTLS: false
 
-# 외부 NLB 노출 — staging 에선 실제 SIP/RTP 검증 위해 켬.
-externalService:
-  enabled: true
-  type: LoadBalancer
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: external
-    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
-    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
-    service.beta.kubernetes.io/aws-load-balancer-attributes: |
-      idle_timeout.timeout_seconds=350,
-      load_balancing.cross_zone.enabled=true
+freeswitch:
+  replicaCount: 1
+  image:
+    repository: signalwire/freeswitch    # third-party — 직접 빌드 안 함
+    tag: "1.10.12"
+  service:
+    type: LoadBalancer                  # SIP 외부 노출
+    sipPort: 5060
 
-serviceAccount:
-  create: true
-  annotations:
-    eks.amazonaws.com/role-arn: "REPLACE_VBGW_IRSA_ROLE_ARN"
+redis:
+  deploy: false                          # AgentOE staging 의 ElastiCache 공유 또는 별도 Redis
+  host: "redis-master.agentoe-staging.svc.cluster.local"
 
-config:
-  ENVIRONMENT: "staging"
-  LOG_LEVEL: "DEBUG"
-  GRPC_PORT: "50051"
-  WS_PORT: "50052"
-  METRICS_PORT: "9100"
-  HEALTH_PORT: "8080"
-  AUDIO_SAMPLE_RATE: "16000"
-  AUDIO_CHUNK_MS: "20"
-  STT_PROVIDER: "google"
-  TTS_PROVIDER: "google"
-  BACKEND_HTTP_URL: "http://agentoe-backend.agentoe-staging.svc.cluster.local"
-  BACKEND_WS_URL: "ws://agentoe-backend.agentoe-staging.svc.cluster.local/api/v1/ws"
-  MAX_CONCURRENT_CALLS: "20"
-
-externalSecrets:
-  enabled: true
-  secretsPrefix: "agentoe/staging"
+ingress:
+  enabled: false                         # vbgw 는 SIP/RTP 가 주력 — HTTP ingress 불필요

@@ -1,0 +1,179 @@
+{
+  "uid": "api-slo",
+  "title": "AgentOE — API SLO",
+  "tags": ["agentoe", "slo", "backend"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      }
+    ]
+  },
+  "links": [
+    { "title": "SLO reference", "url": "/d/internal-slo-reference", "type": "link" },
+    { "title": "Agentic dashboard", "url": "/d/agentic", "type": "link" }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Success ratio (30d)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "slo:http_request_success_ratio:rate30d", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",   "value": null },
+              { "color": "orange","value": 0.998 },
+              { "color": "green", "value": 0.999 }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Latency <500ms (30d)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "slo:http_latency_under_500ms:ratio30d", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",   "value": null },
+              { "color": "orange","value": 0.98 },
+              { "color": "green", "value": 0.99 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "gauge",
+      "title": "Error budget remaining (30d, success)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "slo:budget_remaining:api_success", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "orange", "value": 0.2 },
+              { "color": "green",  "value": 0.5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "gauge",
+      "title": "Error budget remaining (30d, latency)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "slo:budget_remaining:api_latency", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null }, { "color": "orange", "value": 0.2 }, { "color": "green", "value": 0.5 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Success ratio — burn windows",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        { "expr": "slo:http_request_success_ratio:rate5m",  "refId": "A", "legendFormat": "5m" },
+        { "expr": "slo:http_request_success_ratio:rate30m", "refId": "B", "legendFormat": "30m" },
+        { "expr": "slo:http_request_success_ratio:rate1h",  "refId": "C", "legendFormat": "1h" },
+        { "expr": "slo:http_request_success_ratio:rate6h",  "refId": "D", "legendFormat": "6h" },
+        { "expr": "slo:http_request_success_ratio:rate1d",  "refId": "E", "legendFormat": "1d" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 4 } },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Latency under-500ms ratio — burn windows",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        { "expr": "slo:http_latency_under_500ms:ratio5m",  "refId": "A", "legendFormat": "5m" },
+        { "expr": "slo:http_latency_under_500ms:ratio30m", "refId": "B", "legendFormat": "30m" },
+        { "expr": "slo:http_latency_under_500ms:ratio1h",  "refId": "C", "legendFormat": "1h" },
+        { "expr": "slo:http_latency_under_500ms:ratio6h",  "refId": "D", "legendFormat": "6h" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 4 } }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Request rate (5xx vs total)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": "${datasource}",
+      "targets": [
+        { "expr": "slo:http_requests:rate5m",     "refId": "A", "legendFormat": "total" },
+        { "expr": "slo:http_requests_5xx:rate5m", "refId": "B", "legendFormat": "5xx" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 21,
+      "type": "heatmap",
+      "title": "Latency histogram (heatmap)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (le) (rate(http_request_duration_seconds_bucket{job=\"agentoe-backend\"}[5m]))",
+          "format": "heatmap", "legendFormat": "{{le}}", "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "table",
+      "title": "Top routes by error rate (5m)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "topk(15, sum by (route) (rate(http_requests_total{job=\"agentoe-backend\",status=~\"5..\"}[5m])) / clamp_min(sum by (route) (rate(http_requests_total{job=\"agentoe-backend\"}[5m])), 0.001))",
+          "format": "table", "instant": true, "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 4 } }
+    }
+  ]
+}

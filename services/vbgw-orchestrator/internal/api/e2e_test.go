@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"vbgw-orchestrator/internal/config"
-	"vbgw-orchestrator/internal/esl"
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/config"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/esl"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 )
 
 // mockESL implements esl.Commander for E2E testing without a real FreeSWITCH.

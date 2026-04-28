@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 )
 
 // mockESL implements esl.Commander for testing.

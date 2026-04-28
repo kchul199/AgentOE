@@ -42,9 +42,9 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            backend:  ['skeleton/backend/**']
-            vbgw:     ['skeleton/vbgw/**']
-            frontend: ['skeleton/frontend/**']
+            backend:  ['backend/**']
+            vbgw:     ['vbgw/**']
+            frontend: ['frontend/**']
 
       - id: plan
         run: |
@@ -88,11 +88,11 @@ jobs:
         service: ${{ fromJSON(needs.matrix.outputs.services) }}
         include:
           - service: backend
-            context: skeleton/backend
+            context: backend
           - service: vbgw
-            context: skeleton/vbgw
+            context: vbgw
           - service: frontend
-            context: skeleton/frontend
+            context: frontend
     steps:
       - uses: actions/checkout@v4
 

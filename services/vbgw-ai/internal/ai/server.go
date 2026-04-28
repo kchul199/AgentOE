@@ -5,9 +5,9 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"vbgw-ai/internal/config"
+	"github.com/kchul199/agentoe/services/vbgw-ai/internal/config"
 
-	pb "vbgw-ai/proto/voicebot"
+	pb "github.com/kchul199/agentoe/contracts/gen/go/voicebot"
 )
 
 type Server struct {

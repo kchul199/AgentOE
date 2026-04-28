@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"vbgw-orchestrator/internal/config"
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/config"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 )
 
 func TestSendAsync_SuccessfulDelivery(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 )
 
 func TestLive_Returns200(t *testing.T) {

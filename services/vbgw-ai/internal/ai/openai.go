@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"vbgw-ai/internal/config"
+	"github.com/kchul199/agentoe/services/vbgw-ai/internal/config"
 
 	"github.com/sashabaranov/go-openai"
 )

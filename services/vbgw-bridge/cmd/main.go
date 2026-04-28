@@ -21,11 +21,11 @@ import (
 	"syscall"
 	"time"
 
-	"vbgw-bridge/internal/barge"
-	"vbgw-bridge/internal/config"
-	grpcclient "vbgw-bridge/internal/grpc"
-	"vbgw-bridge/internal/vad"
-	"vbgw-bridge/internal/ws"
+	"github.com/kchul199/agentoe/services/vbgw-bridge/internal/barge"
+	"github.com/kchul199/agentoe/services/vbgw-bridge/internal/config"
+	grpcclient "github.com/kchul199/agentoe/services/vbgw-bridge/internal/grpc"
+	"github.com/kchul199/agentoe/services/vbgw-bridge/internal/vad"
+	"github.com/kchul199/agentoe/services/vbgw-bridge/internal/ws"
 )
 
 func main() {

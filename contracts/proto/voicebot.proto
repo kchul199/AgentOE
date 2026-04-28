@@ -24,7 +24,7 @@ syntax = "proto3";
 package voicebot.ai;
 
 // gen/go/voicebot 로 출력. consumer 별 go_package 는 sync 스크립트가 치환.
-option go_package = "agentoe/contracts/gen/go/voicebot";
+option go_package = "github.com/kchul199/agentoe/contracts/gen/go/voicebot";
 
 // C++ Arena Allocation (legacy C++ vbgw 용 — 현재는 미사용이지만 호환 유지)
 option cc_enable_arenas = true;

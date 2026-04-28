@@ -1,4 +1,4 @@
-module vbgw-bridge
+module github.com/kchul199/agentoe/services/vbgw-bridge
 
 go 1.23
 

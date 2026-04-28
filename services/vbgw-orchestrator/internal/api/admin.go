@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 )
 
 type AdminHandler struct {

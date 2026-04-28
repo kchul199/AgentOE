@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"vbgw-bridge/internal/tts"
+	"github.com/kchul199/agentoe/services/vbgw-bridge/internal/tts"
 )
 
 func TestHandleClearBuffer_DrainsTTSChannel(t *testing.T) {

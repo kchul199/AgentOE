@@ -18,9 +18,9 @@ import (
 	"net/http"
 	"regexp"
 
-	"vbgw-orchestrator/internal/esl"
-	"vbgw-orchestrator/internal/ivr"
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/esl"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/ivr"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 
 	"github.com/go-chi/chi/v5"
 )

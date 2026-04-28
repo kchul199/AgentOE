@@ -3,7 +3,7 @@
 orchestrator:
   replicaCount: 2
   image:
-    repository: your-registry/vbgw-orchestrator
+    repository: REPLACE_ECR_REGISTRY/agentoe-staging/vbgw-orchestrator
     pullPolicy: IfNotPresent
     tag: "latest"
   resources:
@@ -23,7 +23,7 @@ orchestrator:
 bridge:
   replicaCount: 1
   image:
-    repository: your-registry/vbgw-bridge
+    repository: REPLACE_ECR_REGISTRY/agentoe-staging/vbgw-bridge
     tag: "latest"
 
 freeswitch:

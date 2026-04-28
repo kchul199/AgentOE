@@ -17,7 +17,7 @@ import (
 	"net/http"
 	"time"
 
-	"vbgw-bridge/internal/tts"
+	"github.com/kchul199/agentoe/services/vbgw-bridge/internal/tts"
 )
 
 // Controller manages barge-in flow from AI clear_buffer to FS uuid_break.

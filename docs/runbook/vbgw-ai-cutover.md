@@ -54,7 +54,7 @@ helm -n vbgw-staging upgrade vbgw ./charts/vbgw \
   -f /tmp/vbgw-staging-cutover.values.yaml \
   --wait --timeout 5m
 
-# 1.2 합성 통화 5건 (vbgw_v2/scripts 의 SIPP / pjsua 등)
+# 1.2 합성 통화 5건 (scripts 의 SIPP / pjsua 등)
 cd vbgw_v2 && ./scripts/synthetic-call.sh --count 5 --staging
 
 # 1.3 backend 로그 — VoicebotAiService.StreamSession 실제 트래픽 확인
@@ -81,7 +81,7 @@ kubectl -n agentoe-staging exec deploy/agentoe-backend -- \
 ## 2. Stage B — prod 에서 10% canary (24h bake)
 
 ```bash
-# 2.1 vbgw_v2/charts/vbgw — prod values 에 canary 활성
+# 2.1 deploy/helm/vbgw — prod values 에 canary 활성
 cat > /tmp/vbgw-prod-canary-10pct.values.yaml <<'EOF'
 bridge:
   replicaCount: 9                            # 90%
@@ -242,4 +242,4 @@ cutover 시 영업/CSM 에 미리 공지: 통화 응답 톤·길이·레이턴�
 - `docs/guide/cross-project-integration.md` — 두 프로젝트 책임 분담
 - `docs/runbook/grpc-stream-debug.md` — gRPC 흐름 디버깅
 - `docs/reference/slo.md` §2.5/2.6 — vbgw 통화 SLO
-- vbgw_v2 측: `vbgw_v2/docs/cutover-vbgw-ai-to-backend.md` (병행 작성 권장)
+- vbgw_v2 측: `docs/cutover-vbgw-ai-to-backend.md` (병행 작성 권장)

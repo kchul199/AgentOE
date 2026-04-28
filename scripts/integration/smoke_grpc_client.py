@@ -31,7 +31,7 @@ import uuid
 from pathlib import Path
 
 # backend 저장소 안에서 실행 — app/ import 가능하게
-ROOT = Path(__file__).resolve().parents[2]   # skeleton/
+ROOT = Path(__file__).resolve().parents[2]   # 
 sys.path.insert(0, str(ROOT / "backend"))
 
 import grpc                                                          # noqa: E402

@@ -18,9 +18,9 @@ import (
 	"net/http/pprof"
 	"time"
 
-	"vbgw-orchestrator/internal/config"
-	"vbgw-orchestrator/internal/esl"
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/config"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/esl"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"

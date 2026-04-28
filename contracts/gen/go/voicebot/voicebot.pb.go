@@ -236,7 +236,7 @@ const file_proto_voicebot_proto_rawDesc = "" +
 	"\tTTS_AUDIO\x10\x01\x12\x0f\n" +
 	"\vEND_OF_TURN\x10\x022^\n" +
 	"\x11VoicebotAiService\x12I\n" +
-	"\rStreamSession\x12\x19.vbgw_ai.logic.AudioChunk\x1a\x19.vbgw_ai.logic.AiResponse(\x010\x01B\x1bZ\x16vbgw-ai/proto/voicebot\xf8\x01\x01b\x06proto3"
+	"\rStreamSession\x12\x19.vbgw_ai.logic.AudioChunk\x1a\x19.vbgw_ai.logic.AiResponse(\x010\x01B\x1bZ\x16github.com/kchul199/agentoe/contracts/gen/go/voicebot\xf8\x01\x01b\x06proto3"
 
 var (
 	file_proto_voicebot_proto_rawDescOnce sync.Once

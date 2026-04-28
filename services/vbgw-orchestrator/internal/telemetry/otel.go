@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"time"
 
-	"vbgw-orchestrator/internal/config"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/config"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"

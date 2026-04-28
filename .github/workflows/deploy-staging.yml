@@ -73,17 +73,17 @@ jobs:
         service: ${{ fromJSON(needs.resolve.outputs.services) }}
         include:
           - service: backend
-            chart_path: skeleton/deploy/helm/agentoe-backend
+            chart_path: deploy/helm/agentoe-backend
             release: agentoe-backend
             smoke_url: /api/v1/livez
             smoke_port: "8000"
           - service: vbgw
-            chart_path: skeleton/deploy/helm/agentoe-vbgw
+            chart_path: deploy/helm/agentoe-vbgw
             release: agentoe-vbgw
             smoke_url: /healthz/live
             smoke_port: "8080"
           - service: frontend
-            chart_path: skeleton/deploy/helm/agentoe-frontend
+            chart_path: deploy/helm/agentoe-frontend
             release: agentoe-frontend
             smoke_url: /healthz
             smoke_port: "8080"
@@ -121,7 +121,7 @@ jobs:
           chart-path:  ${{ matrix.chart_path }}
           release:     ${{ matrix.release }}
           namespace:   agentoe-staging
-          values-file: skeleton/deploy/helm/values/staging/${{ matrix.service }}.values.yaml
+          values-file: deploy/helm/values/staging/${{ matrix.service }}.values.yaml
           image-tag:   ${{ needs.resolve.outputs.image_tag }}
           smoke-url:   ${{ matrix.smoke_url }}
           smoke-port:  ${{ matrix.smoke_port }}

@@ -1,75 +1,54 @@
-# agentoe-vbgw  ·  production
-image:
-  repository: REPLACE_ECR_REGISTRY/agentoe-prod/vbgw
-  tag: ""
+# ──────────────────────────────────────────────────────────────────────────
+# vbgw chart  ·  production override  (multi-deployment)
+# ──────────────────────────────────────────────────────────────────────────
 
-replicaCount: 6
-autoscaling:
-  enabled: true
-  minReplicas: 6
-  maxReplicas: 100
-  targetCPUUtilizationPercentage: 55
-  customMetrics:
-    enabled: true
-    activeCallsPerPod: 30
+orchestrator:
+  replicaCount: 3
+  image:
+    repository: REPLACE_ECR_REGISTRY/agentoe-prod/vbgw-orchestrator
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 1Gi
+  service:
+    type: ClusterIP
+    port: 8080
 
-resources:
-  requests:
-    cpu: 2
-    memory: 3Gi
-  limits:
-    cpu: 6
-    memory: 6Gi
+bridge:
+  replicaCount: 10                       # prod 기본 — cutover 단계에서 stable/canary 분배
+  image:
+    repository: REPLACE_ECR_REGISTRY/agentoe-prod/vbgw-bridge
+    tag: ""
+    pullPolicy: IfNotPresent
 
-terminationGracePeriodSeconds: 900   # 통화 자연 종료 대기 (max 15 분)
+  # cutover 완료 후 (Stage D) 이 값을 agentoe-backend 로 변경.
+  # 현재 default = 자체 vbgw-ai (cutover 시작 전 baseline).
+  grpcAiAddr: "ai-service:50051"
+  grpcAiTLS: false
 
-pdb:
-  enabled: true
-  minAvailable: "75%"
+  canary:
+    enabled: false                       # cutover Stage B (10%) 시작 시 true
+    replicaCount: 1                      # stable 9 + canary 1
+    grpcAiAddr: "agentoe-backend.agentoe.svc.cluster.local:50051"
+    grpcAiTLS: false
 
-priorityClassName: "agentoe-critical"
+freeswitch:
+  replicaCount: 3
+  image:
+    repository: signalwire/freeswitch
+    tag: "1.10.12"
+  service:
+    type: LoadBalancer
+    sipPort: 5060
 
-externalService:
-  enabled: true
-  type: LoadBalancer
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: external
-    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
-    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
-    service.beta.kubernetes.io/aws-load-balancer-attributes: |
-      idle_timeout.timeout_seconds=350,
-      load_balancing.cross_zone.enabled=true,
-      access_logs.s3.enabled=true,
-      access_logs.s3.bucket=REPLACE_NLB_ACCESSLOG_BUCKET,
-      access_logs.s3.prefix=nlb/agentoe-prod-vbgw
+redis:
+  deploy: false
+  host: "redis-master.agentoe.svc.cluster.local"
 
-serviceAccount:
-  create: true
-  annotations:
-    eks.amazonaws.com/role-arn: "REPLACE_VBGW_IRSA_ROLE_ARN_PROD"
-
-config:
-  ENVIRONMENT: "production"
-  LOG_LEVEL: "INFO"
-  GRPC_PORT: "50051"
-  WS_PORT: "50052"
-  METRICS_PORT: "9100"
-  HEALTH_PORT: "8080"
-  AUDIO_SAMPLE_RATE: "16000"
-  AUDIO_CHUNK_MS: "20"
-  STT_PROVIDER: "google"
-  TTS_PROVIDER: "google"
-  BACKEND_HTTP_URL: "http://agentoe-backend.agentoe.svc.cluster.local"
-  BACKEND_WS_URL: "ws://agentoe-backend.agentoe.svc.cluster.local/api/v1/ws"
-  MAX_CONCURRENT_CALLS: "40"
-
-externalSecrets:
-  enabled: true
-  secretsPrefix: "agentoe/prod"
-
-networkPolicy:
-  enabled: true
-  ingress:
-    fromBackendNamespace: "agentoe"
-    fromMonitoringNamespace: "monitoring"
+ingress:
+  enabled: false

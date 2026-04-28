@@ -18,7 +18,7 @@ import (
 	"sort"
 	"time"
 
-	"vbgw-orchestrator/internal/metrics"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/metrics"
 )
 
 // Cleaner periodically removes old and excess recording files.

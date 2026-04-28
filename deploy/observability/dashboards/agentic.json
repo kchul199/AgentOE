@@ -1,0 +1,119 @@
+{
+  "uid": "agentic",
+  "title": "AgentOE — Agentic Pipeline",
+  "tags": ["agentoe", "agentic"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": {
+    "list": [
+      { "name": "datasource", "type": "datasource", "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" } },
+      { "name": "tenant", "type": "query", "datasource": "${datasource}",
+        "query": "label_values(agentoe_pipeline_calls_total, tenant)",
+        "includeAll": true, "multi": true, "current": { "text": "All", "value": "$__all" } }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Pipeline success ratio (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "slo:agentic_success_ratio:rate1h", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 4,
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "red", "value": null }, { "color": "orange", "value": 0.99 }, { "color": "green", "value": 0.995 }
+        ]}}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Latency under 2.5s (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "slo:agentic_latency_under_2_5s:ratio1h", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 3 }}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Active sessions (sum)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "sum(agentoe_active_sessions{tenant=~\"$tenant\"})", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Budget remaining (success, 30d)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "slo:budget_remaining:agentic_success", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Pipeline calls by status (rate5m)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": "${datasource}",
+      "targets": [{
+        "expr": "sum by (status) (rate(agentoe_pipeline_calls_total{tenant=~\"$tenant\"}[5m]))",
+        "legendFormat": "{{status}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Pipeline latency p50 / p95 / p99 (5m)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(agentoe_pipeline_latency_ms_bucket{tenant=~\"$tenant\"}[5m])))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(agentoe_pipeline_latency_ms_bucket{tenant=~\"$tenant\"}[5m])))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(agentoe_pipeline_latency_ms_bucket{tenant=~\"$tenant\"}[5m])))", "legendFormat": "p99", "refId": "C" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 20, "type": "timeseries", "title": "STT / LLM / TTS p95 latency",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": "${datasource}",
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(agentoe_stt_latency_ms_bucket[5m])))", "legendFormat": "STT p95", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(agentoe_llm_latency_ms_bucket[5m])))", "legendFormat": "LLM p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(agentoe_tts_latency_ms_bucket[5m])))", "legendFormat": "TTS p95", "refId": "C" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 21, "type": "timeseries", "title": "Circuit breaker state (0=CLOSED, 1=HALF, 2=OPEN)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "agentoe_circuit_breaker_state", "legendFormat": "{{service}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 2 } }
+    },
+    {
+      "id": 30, "type": "timeseries", "title": "LLM quota check outcomes",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": "${datasource}",
+      "targets": [{
+        "expr": "sum by (result) (rate(agentoe_llm_quota_checks_total{tenant=~\"$tenant\"}[5m]))",
+        "legendFormat": "{{result}}", "refId": "A"
+      }]
+    },
+    {
+      "id": 31, "type": "table", "title": "Top tenants by LLM cost (1h)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": "${datasource}",
+      "targets": [{
+        "expr": "topk(15, sum by (tenant) (increase(agentoe_llm_cost_cents_total[1h])))",
+        "format": "table", "instant": true, "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } }
+    },
+    {
+      "id": 40, "type": "timeseries", "title": "WebSocket back-pressure",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "datasource": "${datasource}",
+      "targets": [
+        { "expr": "sum by (tenant) (agentoe_ws_send_queue_depth{tenant=~\"$tenant\"})", "legendFormat": "queue depth — {{tenant}}", "refId": "A" },
+        { "expr": "sum by (kind) (rate(agentoe_ws_drops_total{tenant=~\"$tenant\"}[5m]))", "legendFormat": "drops/s — {{kind}}", "refId": "B" }
+      ]
+    }
+  ]
+}

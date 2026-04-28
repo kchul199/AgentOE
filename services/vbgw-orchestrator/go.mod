@@ -1,4 +1,4 @@
-module vbgw-orchestrator
+module github.com/kchul199/agentoe/services/vbgw-orchestrator
 
 go 1.23
 

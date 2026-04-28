@@ -1,0 +1,103 @@
+{
+  "uid": "infra",
+  "title": "AgentOE — Infra & Dependencies",
+  "tags": ["agentoe", "infra"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [
+    { "name": "datasource", "type": "datasource", "query": "prometheus",
+      "current": { "text": "Prometheus", "value": "Prometheus" } },
+    { "name": "namespace", "type": "query", "datasource": "${datasource}",
+      "query": "label_values(kube_pod_info{namespace=~\"agentoe.*\"}, namespace)",
+      "includeAll": true, "multi": true, "current": { "text": "All", "value": "$__all" } }
+  ]},
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Pods Ready",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "sum(kube_pod_status_ready{condition=\"true\",namespace=~\"$namespace\"})", "refId": "A" }]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Pods NotReady",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "sum(kube_pod_status_ready{condition=\"false\",namespace=~\"$namespace\"})", "refId": "A" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [
+        { "color": "green", "value": null }, { "color": "red", "value": 1 }
+      ]}}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Restarts (15m)",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\"}[15m]))", "refId": "A" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [
+        { "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 5 }
+      ]}}}
+    },
+    {
+      "id": 4, "type": "stat", "title": "JWKS refresh ratio (1h)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "slo:auth_jwks_refresh_ratio:rate1h", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 4 }}
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "CPU usage / request",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": "${datasource}",
+      "targets": [{
+        "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\",container!=\"\"}[5m])) / sum by (namespace, pod) (kube_pod_container_resource_requests{namespace=~\"$namespace\",resource=\"cpu\"})",
+        "legendFormat": "{{namespace}}/{{pod}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Memory usage / limit",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": "${datasource}",
+      "targets": [{
+        "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{namespace=~\"$namespace\",container!=\"\"}) / sum by (namespace, pod) (kube_pod_container_resource_limits{namespace=~\"$namespace\",resource=\"memory\"})",
+        "legendFormat": "{{namespace}}/{{pod}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    {
+      "id": 20, "type": "timeseries", "title": "External Secret sync (errors)",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 12 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "sum by (exported_namespace) (rate(external_secrets_sync_calls_error[10m]))", "legendFormat": "{{exported_namespace}}", "refId": "A" }]
+    },
+    {
+      "id": 21, "type": "timeseries", "title": "Prometheus scrape — agentoe targets up",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 12 },
+      "datasource": "${datasource}",
+      "targets": [{ "expr": "sum by (job) (up{job=~\"agentoe-.*\"})", "legendFormat": "{{job}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "min": 0 }}
+    },
+    {
+      "id": 30, "type": "timeseries", "title": "Network — Pod ingress (RX)",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 18 },
+      "datasource": "${datasource}",
+      "targets": [{
+        "expr": "sum by (namespace, pod) (rate(container_network_receive_bytes_total{namespace=~\"$namespace\"}[5m]))",
+        "legendFormat": "{{namespace}}/{{pod}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    },
+    {
+      "id": 31, "type": "timeseries", "title": "Network — Pod egress (TX)",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 18 },
+      "datasource": "${datasource}",
+      "targets": [{
+        "expr": "sum by (namespace, pod) (rate(container_network_transmit_bytes_total{namespace=~\"$namespace\"}[5m]))",
+        "legendFormat": "{{namespace}}/{{pod}}", "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    }
+  ]
+}

@@ -6,14 +6,14 @@
 
 ## 0. 전제
 
-- **vbgw_v2 와 AgenticOE_v2 가 같은 컴퓨터의 형제 폴더** (`~/AgenticOE_v2`, `~/vbgw_v2`).
+- **vbgw_v2 와 AgenticOE_v2 가 같은 컴퓨터의 형제 폴더** (`~/AgenticOE_v2`, `~/AgenticOE_v2`).
 - Docker Desktop / Engine + Docker Compose v2.
 - macOS / Linux. Apple Silicon 의 경우 `vbgw-ai` 가 linux/arm64 — `--platform` 자동 매칭.
 
 ## 1. 빠른 시작 (one-command)
 
 ```bash
-cd ~/AgenticOE_v2/skeleton/scripts/integration
+cd ~/AgenticOE_v2/scripts/integration
 ./dev-integration.sh up
 ```
 
@@ -137,7 +137,7 @@ bridge env: AI_GRPC_ADDR=agentoe-api:50051   ← 공유 network 의 service alia
 | smoke client timeout                                  | backend pipeline 이 hang. Mongo/Redis 미준비 가능. `agentoe-api` 로그 → `mongo-init` completed 인지 |
 | bridge 가 `agentoe-api: name resolution failed`       | 공유 network 미가입. `docker inspect vbgw-bridge | jq '.[0].NetworkSettings.Networks'` |
 | bridge 컨테이너가 vbgw-ai:8091 으로 향함 (override 무효) | compose 명령에 `-f docker-compose.integration.yml` 빠짐. 둘 다 명시 필수 |
-| ESL_PASSWORD 누락으로 freeswitch 가 죽음               | `vbgw_v2/vbgw-freeswitch/.env` 작성 필요. `cp .env.example .env` 후 채움 |
+| ESL_PASSWORD 누락으로 freeswitch 가 죽음               | `services/freeswitch/.env` 작성 필요. `cp .env.example .env` 후 채움 |
 | backend `pyopenssl/cryptography` 충돌                 | sandbox 환경 한정 — Docker 안에선 정상. local pip 환경 문제면 `pip install --upgrade pyopenssl` |
 | smoke 가 STT/TTS 0 — "no STT_RESULT and no TTS_AUDIO" | dummy audio 라 STT 가 빈 응답. 그래도 backend 가 STT 호출하고 응답 받으면 통과해야 — `[ERROR]` 도 STT_RESULT 카운트됨. 0 이면 pipeline 실행 자체가 안 됨 (handle_audio buffer 미달 등) |
 
@@ -154,13 +154,13 @@ bridge env: AI_GRPC_ADDR=agentoe-api:50051   ← 공유 network 의 service alia
 - `docs/runbook/vbgw-ai-cutover.md` — 운영 cutover 4 stage
 - `docs/runbook/grpc-stream-debug.md` — staging/prod 의 gRPC 흐름 디버깅
 - `docs/guide/cross-project-integration.md` — 두 프로젝트 책임 분담
-- canonical proto: `skeleton/contracts/proto/voicebot.proto`
-- backend Servicer: `skeleton/backend/app/grpc_server/voicebot_service.py`
-- vbgw bridge config: `vbgw_v2/vbgw-freeswitch/bridge/internal/config/config.go`
+- canonical proto: `contracts/proto/voicebot.proto`
+- backend Servicer: `backend/app/grpc_server/voicebot_service.py`
+- vbgw bridge config: `services/vbgw-bridge/internal/config/config.go`
 
 ## 8. 다음 개선 후보 (선택)
 
 - 합성 STT 응답 — backend 가 mock STT 모드 (`STT_PROVIDER=mock`) 지원하면 dummy audio 로도 의미 있는 텍스트 응답
 - 실제 wav 파일 입력 — `--audio-file /path/to/sample.wav` 옵션 (16kHz mono PCM 변환 후 chunk 분할)
-- bridge 측 gRPC client 직접 사용 — `vbgw_v2/vbgw-freeswitch/bridge/internal/grpc/client.go` 단독 빌드해 smoke
+- bridge 측 gRPC client 직접 사용 — `services/vbgw-bridge/internal/grpc/client.go` 단독 빌드해 smoke
 - chaos — backend 재시작 / network 끊김 / SIGTERM 중간 동안 stream 동작 검증

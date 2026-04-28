@@ -1,4 +1,4 @@
-module vbgw-ai
+module github.com/kchul199/agentoe/services/vbgw-ai
 
 go 1.23
 

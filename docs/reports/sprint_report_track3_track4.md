@@ -49,7 +49,7 @@ OK Track 3 metrics flow: all 4 APIs + Prometheus export verified
 ## Track 4 — GUI 시나리오 빌더 (React Flow)
 
 ### 4-A 프런트엔드 스캐폴딩
-- `skeleton/frontend/` 신규. React 18.3.1 / Vite 5.4.10 / TypeScript 5.6.3 / React Flow 11.11.4 / Zod 3.23.8.
+- `frontend/` 신규. React 18.3.1 / Vite 5.4.10 / TypeScript 5.6.3 / React Flow 11.11.4 / Zod 3.23.8.
 - `package.json`, `tsconfig.json` (paths `@/* → src/*`), `vite.config.ts` (`/api → localhost:8000` proxy), `vitest.config.ts`, `index.html`, `.gitignore` 모두 포함.
 - 기존 HTML 목업은 의존성 없이 보관용 (참조 삭제됨).
 

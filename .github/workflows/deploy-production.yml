@@ -59,13 +59,13 @@ jobs:
         service: [backend, vbgw, frontend]
         include:
           - service: backend
-            chart_path: skeleton/deploy/helm/agentoe-backend
+            chart_path: deploy/helm/agentoe-backend
             release: agentoe-backend
           - service: vbgw
-            chart_path: skeleton/deploy/helm/agentoe-vbgw
+            chart_path: deploy/helm/agentoe-vbgw
             release: agentoe-vbgw
           - service: frontend
-            chart_path: skeleton/deploy/helm/agentoe-frontend
+            chart_path: deploy/helm/agentoe-frontend
             release: agentoe-frontend
     env:
       ENV: prod
@@ -90,7 +90,7 @@ jobs:
           chart-path:  ${{ matrix.chart_path }}
           release:     ${{ matrix.release }}
           namespace:   agentoe
-          values-file: skeleton/deploy/helm/values/prod/${{ matrix.service }}.values.yaml
+          values-file: deploy/helm/values/prod/${{ matrix.service }}.values.yaml
           image-tag:   ${{ needs.resolve.outputs.image_tag }}
           diff-only:   "true"
 
@@ -125,7 +125,7 @@ jobs:
       - run: aws s3 cp "${{ vars.TF_OUTPUT_S3_URI_PROD }}" /tmp/agentoe-tf-prod.json
 
       - name: Helm install canary release (separate name + 10% weight annotation)
-        working-directory: skeleton/deploy/helm
+        working-directory: deploy/helm
         run: |
           # canary 는 fullnameOverride 로 호스트 충돌 방지하고, ALB action.weight 어노테이션 활용.
           helm upgrade --install agentoe-backend-canary ./agentoe-backend \
@@ -171,17 +171,17 @@ jobs:
         service: [backend, vbgw, frontend]
         include:
           - service: backend
-            chart_path: skeleton/deploy/helm/agentoe-backend
+            chart_path: deploy/helm/agentoe-backend
             release: agentoe-backend
             smoke_url: /api/v1/livez
             smoke_port: "8000"
           - service: vbgw
-            chart_path: skeleton/deploy/helm/agentoe-vbgw
+            chart_path: deploy/helm/agentoe-vbgw
             release: agentoe-vbgw
             smoke_url: /healthz/live
             smoke_port: "8080"
           - service: frontend
-            chart_path: skeleton/deploy/helm/agentoe-frontend
+            chart_path: deploy/helm/agentoe-frontend
             release: agentoe-frontend
             smoke_url: /healthz
             smoke_port: "8080"
@@ -201,7 +201,7 @@ jobs:
           chart-path:  ${{ matrix.chart_path }}
           release:     ${{ matrix.release }}
           namespace:   agentoe
-          values-file: skeleton/deploy/helm/values/prod/${{ matrix.service }}.values.yaml
+          values-file: deploy/helm/values/prod/${{ matrix.service }}.values.yaml
           image-tag:   ${{ needs.resolve.outputs.image_tag }}
           smoke-url:   ${{ matrix.smoke_url }}
           smoke-port:  ${{ matrix.smoke_port }}

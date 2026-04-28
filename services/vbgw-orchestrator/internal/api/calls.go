@@ -16,9 +16,9 @@ import (
 	"net/http"
 	"strings"
 
-	"vbgw-orchestrator/internal/esl"
-	"vbgw-orchestrator/internal/metrics"
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/esl"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/metrics"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 
 	"github.com/google/uuid"
 )

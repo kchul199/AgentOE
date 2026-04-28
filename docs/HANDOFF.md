@@ -6,14 +6,14 @@
 ## 0. TL;DR
 
 - 프로젝트: **AgentOE** — 멀티 테넌트 Agentic Callbot. backend(FastAPI) + frontend(React SPA), AWS EKS 배포.
-- **vbgw 는 별도 프로젝트** (`vbgw_v2/`, Go + FreeSwitch). proto contract 만 우리가 owner. 자세히 §11.
+- **vbgw 는 별도 프로젝트** (``, Go + FreeSwitch). proto contract 만 우리가 owner. 자세히 §11.
 - 단일 진실 소스 5개:
   - **CLAUDE.md** (프로젝트 규칙 3가지) — 절대 어기지 말 것.
   - **이 HANDOFF.md** — 현재 상태 / 다음 액션.
   - **`docs/reference/slo.md`** — SLO 임계치.
   - **`contracts/proto/voicebot.proto`** — vbgw 와의 gRPC contract (canonical).
   - **TaskList** — 작업 단위 추적 (`TaskList` 도구로 본다).
-- 코드 루트: `skeleton/` (이상하게 들리지만 history 적으로 이름이 굳음).
+- 코드 루트: `` (이상하게 들리지만 history 적으로 이름이 굳음).
 - **현재 상태: Phase 1-3 + cross-project 통합 셋업 완료.** 다음 후보는 §6.
 
 ## 1. 절대 규칙 (CLAUDE.md)
@@ -30,7 +30,7 @@
 AgenticOE_v2/
 ├── CLAUDE.md                    # 프로젝트 규칙 (위 §1)
 ├── docs/                        # ★ 비즈니스 문서 (한국어 docx/xlsx). 코드와 별개.
-└── skeleton/                    # ★ 모든 코드/배포 자산 (이름 history)
+└──                     # ★ 모든 코드/배포 자산 (이름 history)
     ├── README.md
     ├── Makefile, docker-compose.{dev,}.yml
     ├── backend/                 # FastAPI + Mongo + Redis
@@ -138,7 +138,7 @@ AgenticOE_v2/
 ## 4. 전체 작업 통계 (참고)
 
 - 총 task: 52개 (모두 closed except #52 자체).
-- 코드/매니페스트 파일: 약 130개 (skeleton/ 안, node_modules 제외).
+- 코드/매니페스트 파일: 약 130개 ( 안, node_modules 제외).
 - Dockerfile 3개, Helm 차트 3개, GHA 워크플로 5개 + composite 5개, Terraform 모듈 9개.
 - Grafana 대시보드 4개 (총 39 패널), PrometheusRule 65개.
 
@@ -221,19 +221,19 @@ ANY 한 개 골라서 진행. AskUserQuestion 으로 사용자에게 물어볼 �
 
 ```bash
 # Helm 차트 검증 (3 차트 × 2 env)
-cd skeleton/deploy/helm && ENV=staging make lint
+cd deploy/helm && ENV=staging make lint
 
 # Terraform 모듈 syntax 빠른 점검 (실제 plan 은 AWS creds 필요)
-python3 -c 'import hcl2; [hcl2.load(open(f)) for f in __import__("glob").glob("skeleton/deploy/terraform/**/*.tf", recursive=True)]'
+python3 -c 'import hcl2; [hcl2.load(open(f)) for f in __import__("glob").glob("deploy/terraform/**/*.tf", recursive=True)]'
 
 # Prometheus rule 문법 — promtool
-promtool check rules skeleton/deploy/k8s-bootstrap/manifests/prometheus-rules/*.yaml
+promtool check rules deploy/k8s-bootstrap/manifests/prometheus-rules/*.yaml
 
 # GHA 워크플로 YAML 점검
-python3 -c 'import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob("skeleton/.github/**/*.yml", recursive=True)]'
+python3 -c 'import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob(".github/**/*.yml", recursive=True)]'
 
 # 백엔드 빠른 sanity (의존성 설치 후)
-cd skeleton/backend && ruff check app/ && mypy app/ --ignore-missing-imports
+cd backend && ruff check app/ && mypy app/ --ignore-missing-imports
 ```
 
 ## 9. 의도적 제외 (우리가 안 한 것 — 다음 사람이 헷갈리지 말 것)
@@ -243,7 +243,7 @@ cd skeleton/backend && ruff check app/ && mypy app/ --ignore-missing-imports
 - **백업 자동화** — Atlas PIT 만 enable. Velero / S3 동기화 미구현.
 - **Tracing** — trace_id 만 로그에 박혀 있음. OTel exporter 미설정.
 - **Image signing** — Trivy 스캔까지. cosign 서명/검증 없음.
-- **vbgw 실 음성 처리** — 이 repo 안에는 안 함. 별도 프로젝트 `vbgw_v2/` 책임 (§11 참고).
+- **vbgw 실 음성 처리** — 이 repo 안에는 안 함. 별도 프로젝트 `` 책임 (§11 참고).
 - **load test** — k6 / chaos mesh 미작성.
 - **vbgw-ai → backend cutover** — backend 가 VoicebotAiService 구현 (Phase Y) 했지만 vbgw_v2 의 bridge 가 아직 vbgw-ai 호출 중. cutover PR 별도.
 
@@ -262,26 +262,26 @@ cd skeleton/backend && ruff check app/ && mypy app/ --ignore-missing-imports
 
 | 항목                | AgenticOE_v2                          | vbgw_v2                                       |
 |---------------------|----------------------------------------|----------------------------------------------|
-| 위치 (host)         | `~/AgenticOE_v2`                       | `~/vbgw_v2`                                   |
+| 위치 (host)         | `~/AgenticOE_v2`                       | `~/AgenticOE_v2`                                   |
 | 위치 (이 세션 VM)    | `mnt/AgenticOE_v2`                     | `mnt/vbgw_v2`                                 |
 | 언어                | Python (FastAPI) + React               | Go + FreeSwitch                               |
 | 책임                | Agentic 오케스트레이션 / 인프라 / proto owner | SIP/RTP / 코덱 / WS↔gRPC bridge             |
-| Helm chart          | `agentoe-{backend,frontend}` (vbgw 는 deprecated) | `vbgw_v2/charts/vbgw/` (3 deployment) |
+| Helm chart          | `agentoe-{backend,frontend}` (vbgw 는 deprecated) | `deploy/helm/vbgw/` (3 deployment) |
 | Proto               | **owner** (`contracts/proto/voicebot.proto`)    | consumer (3 곳 sync)                          |
 
 ### 실 구조 vs vbgw_v2 의 CLAUDE.md
-**vbgw_v2/CLAUDE.md 는 stale 함**: C++/PJSIP 라고 적혀 있지만 실제 코드는 Go + FreeSwitch (`vbgw-ai/`, `vbgw-freeswitch/`). `legacy/` 디렉토리에만 옛 C++ 흔적. vbgw_v2 측 CLAUDE.md 갱신 PR 이 별도로 필요. **새 세션이 vbgw_v2 만 mount 한 채 시작하면 잘못된 컨텍스트 받을 위험 있음.**
+**CLAUDE.md 는 stale 함**: C++/PJSIP 라고 적혀 있지만 실제 코드는 Go + FreeSwitch (`vbgw-ai/`, `vbgw-freeswitch/`). `legacy/` 디렉토리에만 옛 C++ 흔적. vbgw_v2 측 CLAUDE.md 갱신 PR 이 별도로 필요. **새 세션이 vbgw_v2 만 mount 한 채 시작하면 잘못된 컨텍스트 받을 위험 있음.**
 
 ### 우리 placeholder 의 위상
-- `skeleton/vbgw/` — Python placeholder. **integration test stub 전용, 실 배포 안 함.**
-- `skeleton/deploy/helm/agentoe-vbgw/` — DEPRECATED. vbgw_v2 자체 chart 사용.
+- `vbgw/` — Python placeholder. **integration test stub 전용, 실 배포 안 함.**
+- `deploy/helm/agentoe-vbgw/` — DEPRECATED. vbgw_v2 자체 chart 사용.
 - 둘 다 `README.md` / `DEPRECATED.md` 로 명시.
 
 ### Proto 변경 워크플로
 ```bash
 # AgenticOE_v2 측
-$EDITOR skeleton/contracts/proto/voicebot.proto
-cd skeleton/contracts && make gen-python && make gen-go
+$EDITOR contracts/proto/voicebot.proto
+cd contracts && make gen-python && make gen-go
 make sync-vbgw VBGW=$HOME/vbgw_v2     # vbgw_v2 의 3 곳 동기화
 make verify-vbgw VBGW=$HOME/vbgw_v2   # drift 검증
 

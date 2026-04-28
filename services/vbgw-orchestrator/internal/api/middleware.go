@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"vbgw-orchestrator/internal/metrics"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/metrics"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"

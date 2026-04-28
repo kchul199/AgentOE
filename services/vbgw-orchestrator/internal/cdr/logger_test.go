@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 )
 
 func TestLogHangup_SetsDuration(t *testing.T) {

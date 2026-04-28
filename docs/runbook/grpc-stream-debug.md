@@ -1,6 +1,6 @@
 # Runbook — VoicebotAiService gRPC 흐름 디버깅
 
-> 배경: backend (`app/grpc_server/`) 가 `voicebot.ai.VoicebotAiService` 호스팅. vbgw_v2/bridge 가 client.
+> 배경: backend (`app/grpc_server/`) 가 `voicebot.ai.VoicebotAiService` 호스팅. bridge 가 client.
 > 트래픽: bridge → backend gRPC :50051 (cluster-internal).
 
 ## 0. 확인 위치
@@ -96,7 +96,7 @@ bridge 가 새 발화 시 `is_speaking=true` AudioChunk 보내야 backend 가 `c
 kubectl -n agentoe logs $POD --since=2m \
   | jq -r 'select(.event=="audio_chunk_received") | .is_speaking'
 ```
-모두 `false` 만 나오면 bridge 의 silero VAD 가 발화 감지 못 함 — vbgw_v2/bridge/internal/vad 점검.
+모두 `false` 만 나오면 bridge 의 silero VAD 가 발화 감지 못 함 — bridge/internal/vad 점검.
 
 ### 3.5 stream 이 정상 종료 안 됨 (영원히 idle)
 
@@ -142,7 +142,7 @@ helm -n vbgw-staging upgrade vbgw <chart> --set bridge.grpcAiAddr=ai-service:500
 ## 6. 관련 문서
 
 - 통합 가이드: `docs/guide/cross-project-integration.md`
-- proto contract: `skeleton/contracts/proto/voicebot.proto`
-- Servicer 코드: `skeleton/backend/app/grpc_server/voicebot_service.py`
-- 메트릭 정의: `skeleton/backend/app/grpc_server/metrics.py`
+- proto contract: `contracts/proto/voicebot.proto`
+- Servicer 코드: `backend/app/grpc_server/voicebot_service.py`
+- 메트릭 정의: `backend/app/grpc_server/metrics.py`
 - SLO 정의 (vbgw 시리즈): `docs/reference/slo.md` §2.5/2.6

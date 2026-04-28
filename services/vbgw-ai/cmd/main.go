@@ -6,9 +6,9 @@ import (
 	"net"
 	"os"
 
-	"vbgw-ai/internal/ai"
-	"vbgw-ai/internal/config"
-	pb "vbgw-ai/proto/voicebot"
+	"github.com/kchul199/agentoe/services/vbgw-ai/internal/ai"
+	"github.com/kchul199/agentoe/services/vbgw-ai/internal/config"
+	pb "github.com/kchul199/agentoe/contracts/gen/go/voicebot"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"

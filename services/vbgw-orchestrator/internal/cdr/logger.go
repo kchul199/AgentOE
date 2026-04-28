@@ -14,8 +14,8 @@ import (
 	"log/slog"
 	"time"
 
-	"vbgw-orchestrator/internal/metrics"
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/metrics"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 )
 
 // Record represents a Call Detail Record.

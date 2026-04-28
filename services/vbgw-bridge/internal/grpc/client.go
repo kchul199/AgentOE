@@ -19,7 +19,7 @@ import (
 	"log/slog"
 	"sync"
 
-	pb "vbgw-bridge/proto/voicebot"
+	pb "github.com/kchul199/agentoe/contracts/gen/go/voicebot"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

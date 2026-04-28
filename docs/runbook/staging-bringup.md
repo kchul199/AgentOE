@@ -1,7 +1,7 @@
 # Runbook — Staging 환경 0 → 1 브링업
 
 > **목표:** 빈 AWS 계정 + 빈 MongoDB Atlas Org 에서 시작해, 약 60–90 분 안에 staging 클러스터에 backend / vbgw / frontend 가 정상 응답 가능한 상태까지 도달.
-> **선행:** GitHub repo 의 `skeleton/deploy/` 가 의도한 모양으로 머지되어 있을 것.
+> **선행:** GitHub repo 의 `deploy/` 가 의도한 모양으로 머지되어 있을 것.
 
 ---
 
@@ -42,7 +42,7 @@ export TF_VAR_atlas_project_id=...
 ## 1. Terraform state 백엔드 (5 분)
 
 ```bash
-cd skeleton/deploy/terraform/bootstrap-state
+cd deploy/terraform/bootstrap-state
 terraform init
 terraform apply -auto-approve
 ```
@@ -54,7 +54,7 @@ terraform apply -auto-approve
 ## 2. 인프라 프로비저닝 (35–45 분)
 
 ```bash
-cd skeleton/deploy/terraform/environments/staging
+cd deploy/terraform/environments/staging
 
 cp terraform.tfvars.example terraform.tfvars
 # 편집: aws_region, vpc_cidr, atlas_*, route53_zone_id, project_name, env=staging
@@ -177,9 +177,9 @@ SHA=$(git rev-parse --short HEAD)
 aws ecr get-login-password --region "$AWS_REGION" | \
   docker login --username AWS --password-stdin "$ECR_REG"
 
-docker build -t "$ECR_REG/agentoe-staging/backend:$SHA"  ./skeleton/backend
-docker build -t "$ECR_REG/agentoe-staging/vbgw:$SHA"     ./skeleton/vbgw
-docker build -t "$ECR_REG/agentoe-staging/frontend:$SHA" ./skeleton/frontend
+docker build -t "$ECR_REG/agentoe-staging/backend:$SHA"  ./backend
+docker build -t "$ECR_REG/agentoe-staging/vbgw:$SHA"     ./vbgw
+docker build -t "$ECR_REG/agentoe-staging/frontend:$SHA" ./frontend
 
 docker push "$ECR_REG/agentoe-staging/backend:$SHA"
 docker push "$ECR_REG/agentoe-staging/vbgw:$SHA"
@@ -191,7 +191,7 @@ docker push "$ECR_REG/agentoe-staging/frontend:$SHA"
 ## 6. Helm 차트 배포 (5–8 분)
 
 ```bash
-cd skeleton/deploy/helm
+cd deploy/helm
 
 # REPLACE_* 토큰 채우기
 ENV=staging make render-values
@@ -279,7 +279,7 @@ open http://localhost:9090/targets
 ### 7.5 합성 트래픽
 
 ```bash
-TOKEN=$(./skeleton/scripts/issue-test-jwt.sh)   # JWT_SECRET 로 서명한 테스트 토큰
+TOKEN=$(./scripts/issue-test-jwt.sh)   # JWT_SECRET 로 서명한 테스트 토큰
 
 curl -s https://api-staging.agentoe.io/api/v1/healthz \
   -H "Authorization: Bearer $TOKEN" | jq .
@@ -316,7 +316,7 @@ helm -n agentoe-staging rollback agentoe-backend
 전체 정리 (staging 비용 절감용):
 
 ```bash
-cd skeleton/deploy/helm && ENV=staging make uninstall
+cd deploy/helm && ENV=staging make uninstall
 
 cd ../terraform/environments/staging
 terraform destroy

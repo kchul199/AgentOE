@@ -17,7 +17,7 @@ import (
 	"net/http"
 	"time"
 
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 )
 
 // ESLChecker is the interface HealthHandler needs from ESL client.

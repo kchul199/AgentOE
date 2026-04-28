@@ -31,18 +31,18 @@ jobs:
         with:
           filters: |
             backend:
-              - 'skeleton/backend/**'
+              - 'backend/**'
             vbgw:
-              - 'skeleton/vbgw/**'
+              - 'vbgw/**'
             frontend:
-              - 'skeleton/frontend/**'
+              - 'frontend/**'
             helm:
-              - 'skeleton/deploy/helm/**'
+              - 'deploy/helm/**'
             terraform:
-              - 'skeleton/deploy/terraform/**'
+              - 'deploy/terraform/**'
             docker:
-              - 'skeleton/**/Dockerfile'
-              - 'skeleton/**/Dockerfile.*'
+              - '**/Dockerfile'
+              - '**/Dockerfile.*'
 
   # ── Helm chart lint + render dry-run (3 charts × 2 envs) ───────────────
   helm-lint:
@@ -67,13 +67,13 @@ jobs:
       - uses: ./.github/actions/setup-helm
 
       - name: helm lint
-        working-directory: skeleton/deploy/helm
+        working-directory: deploy/helm
         run: |
           helm lint "./${{ matrix.chart }}" \
             -f "values/${{ matrix.env }}/${{ matrix.values_basename }}.values.yaml"
 
       - name: helm template (manifest 만 생성, validate 불가 — 클러스터 없음)
-        working-directory: skeleton/deploy/helm
+        working-directory: deploy/helm
         run: |
           helm template "${{ matrix.chart }}-${{ matrix.env }}" "./${{ matrix.chart }}" \
             -f "values/${{ matrix.env }}/${{ matrix.values_basename }}.values.yaml" \
@@ -104,11 +104,11 @@ jobs:
           terraform_version: "1.7.5"
 
       - name: terraform fmt -check (recursive)
-        working-directory: skeleton/deploy/terraform
+        working-directory: deploy/terraform
         run: terraform fmt -check -recursive -diff
 
       - name: terraform validate (각 env)
-        working-directory: skeleton/deploy/terraform
+        working-directory: deploy/terraform
         run: |
           set -e
           for d in environments/*/; do
@@ -121,7 +121,7 @@ jobs:
         uses: terraform-linters/setup-tflint@v4
         with: { tflint_version: latest }
       - run: |
-          cd skeleton/deploy/terraform
+          cd deploy/terraform
           tflint --recursive --format compact
 
   # ── Trivy filesystem scan (시크릿 / IaC misconfig) ─────────────────────
@@ -158,9 +158,9 @@ jobs:
       fail-fast: false
       matrix:
         dockerfile:
-          - skeleton/backend/Dockerfile
-          - skeleton/vbgw/Dockerfile
-          - skeleton/frontend/Dockerfile
+          - backend/Dockerfile
+          - vbgw/Dockerfile
+          - frontend/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: hadolint/hadolint-action@v3.1.0
@@ -181,18 +181,18 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: skeleton/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install
-        working-directory: skeleton/frontend
+        working-directory: frontend
         run: npm ci
 
       - name: Type check
-        working-directory: skeleton/frontend
+        working-directory: frontend
         run: npx tsc --noEmit
 
       - name: Vitest (단위)
-        working-directory: skeleton/frontend
+        working-directory: frontend
         run: npx vitest run
 
   # ── 게이트 — 모든 적용 잡이 통과해야 머지 가능 (branch protection 에 등록) ─

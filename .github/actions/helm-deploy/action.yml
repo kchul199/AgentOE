@@ -8,7 +8,7 @@ description: |
 
 inputs:
   chart-path:
-    description: "Helm chart 경로 (skeleton/deploy/helm/agentoe-backend 등)"
+    description: "Helm chart 경로 (deploy/helm/agentoe-backend 등)"
     required: true
   release:
     description: "Helm release 이름"
@@ -44,7 +44,7 @@ runs:
   steps:
     - name: Render REPLACE_* tokens
       shell: bash
-      working-directory: skeleton/deploy/helm
+      working-directory: deploy/helm
       run: |
         # tf output JSON 은 호출 워크플로가 사전에 /tmp/agentoe-tf-${ENV}.json 으로 떨어뜨려 둠.
         : "${ENV:?must set ENV in workflow env}"
@@ -55,7 +55,7 @@ runs:
 
     - name: Helm diff
       shell: bash
-      working-directory: skeleton/deploy/helm
+      working-directory: deploy/helm
       run: |
         echo "::group::helm diff"
         helm diff upgrade "${{ inputs.release }}" "${{ inputs.chart-path }}" \
@@ -76,7 +76,7 @@ runs:
     - name: Helm upgrade --install
       if: inputs.diff-only != 'true'
       shell: bash
-      working-directory: skeleton/deploy/helm
+      working-directory: deploy/helm
       run: |
         kubectl get ns "${{ inputs.namespace }}" >/dev/null 2>&1 \
           || kubectl create ns "${{ inputs.namespace }}"

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 
 	"github.com/go-chi/chi/v5"
 )

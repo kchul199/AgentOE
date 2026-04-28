@@ -9,7 +9,7 @@ inputs:
     description: "서비스 이름 (backend / vbgw / frontend) — repo 이름 = ${ecr-prefix}/${service}"
     required: true
   context:
-    description: "Docker build context 경로 (예: skeleton/backend)"
+    description: "Docker build context 경로 (예: backend)"
     required: true
   dockerfile:
     description: "Dockerfile 경로"

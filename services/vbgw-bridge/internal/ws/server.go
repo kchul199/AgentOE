@@ -21,9 +21,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"vbgw-bridge/internal/barge"
-	grpcclient "vbgw-bridge/internal/grpc"
-	"vbgw-bridge/internal/vad"
+	"github.com/kchul199/agentoe/services/vbgw-bridge/internal/barge"
+	grpcclient "github.com/kchul199/agentoe/services/vbgw-bridge/internal/grpc"
+	"github.com/kchul199/agentoe/services/vbgw-bridge/internal/vad"
 )
 
 var upgrader = websocket.Upgrader{

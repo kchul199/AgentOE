@@ -14,8 +14,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"vbgw-orchestrator/internal/esl"
-	"vbgw-orchestrator/internal/session"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/esl"
+	"github.com/kchul199/agentoe/services/vbgw-orchestrator/internal/session"
 
 	"github.com/go-chi/chi/v5"
 )
