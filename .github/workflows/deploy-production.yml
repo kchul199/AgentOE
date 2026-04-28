@@ -56,17 +56,20 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        service: [backend, vbgw, frontend]
+        service: [backend, frontend, vbgw]
         include:
           - service: backend
             chart_path: deploy/helm/agentoe-backend
             release: agentoe-backend
-          - service: vbgw
-            chart_path: deploy/helm/agentoe-vbgw
-            release: agentoe-vbgw
+            namespace: agentoe
           - service: frontend
             chart_path: deploy/helm/agentoe-frontend
             release: agentoe-frontend
+            namespace: agentoe
+          - service: vbgw
+            chart_path: deploy/helm/vbgw
+            release: vbgw
+            namespace: vbgw
     env:
       ENV: prod
     steps:
@@ -89,7 +92,7 @@ jobs:
         with:
           chart-path:  ${{ matrix.chart_path }}
           release:     ${{ matrix.release }}
-          namespace:   agentoe
+          namespace:   ${{ matrix.namespace }}
           values-file: deploy/helm/values/prod/${{ matrix.service }}.values.yaml
           image-tag:   ${{ needs.resolve.outputs.image_tag }}
           diff-only:   "true"
@@ -168,22 +171,25 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        service: [backend, vbgw, frontend]
+        service: [backend, frontend, vbgw]
         include:
           - service: backend
             chart_path: deploy/helm/agentoe-backend
             release: agentoe-backend
+            namespace: agentoe
             smoke_url: /api/v1/livez
             smoke_port: "8000"
-          - service: vbgw
-            chart_path: deploy/helm/agentoe-vbgw
-            release: agentoe-vbgw
-            smoke_url: /healthz/live
-            smoke_port: "8080"
           - service: frontend
             chart_path: deploy/helm/agentoe-frontend
             release: agentoe-frontend
+            namespace: agentoe
             smoke_url: /healthz
+            smoke_port: "8080"
+          - service: vbgw
+            chart_path: deploy/helm/vbgw
+            release: vbgw
+            namespace: vbgw
+            smoke_url: /live
             smoke_port: "8080"
     env:
       ENV: prod
@@ -200,7 +206,7 @@ jobs:
         with:
           chart-path:  ${{ matrix.chart_path }}
           release:     ${{ matrix.release }}
-          namespace:   agentoe
+          namespace:   ${{ matrix.namespace }}
           values-file: deploy/helm/values/prod/${{ matrix.service }}.values.yaml
           image-tag:   ${{ needs.resolve.outputs.image_tag }}
           smoke-url:   ${{ matrix.smoke_url }}

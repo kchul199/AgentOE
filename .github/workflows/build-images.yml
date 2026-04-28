@@ -42,25 +42,31 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            backend:  ['backend/**']
-            vbgw:     ['vbgw/**']
-            frontend: ['frontend/**']
+            backend:           ['services/backend/**']
+            frontend:          ['services/frontend/**']
+            vbgw_ai:           ['services/vbgw-ai/**', 'contracts/**']
+            vbgw_bridge:       ['services/vbgw-bridge/**', 'contracts/**']
+            vbgw_orchestrator: ['services/vbgw-orchestrator/**']
+            # freeswitch 는 third-party 이미지 (signalwire/freeswitch) — 직접 빌드 안 함
 
       - id: plan
         run: |
+          ALL='["backend","frontend","vbgw-ai","vbgw-bridge","vbgw-orchestrator"]'
           # tag push 또는 workflow_dispatch 입력은 전체 빌드 의도로 간주.
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo 'services=["backend","vbgw","frontend"]' >> "$GITHUB_OUTPUT"; exit 0
+            echo "services=$ALL" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if [[ -n "${{ inputs.services }}" ]]; then
             arr=$(echo "${{ inputs.services }}" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";""))')
             echo "services=$arr" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          # path filter 결과 기반
+          # path filter 결과 기반 — vbgw_* 변경은 해당 service 만 빌드
           arr='[]'
-          [[ "${{ steps.changed.outputs.backend  }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["backend"]')
-          [[ "${{ steps.changed.outputs.vbgw     }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["vbgw"]')
-          [[ "${{ steps.changed.outputs.frontend }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["frontend"]')
+          [[ "${{ steps.changed.outputs.backend           }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["backend"]')
+          [[ "${{ steps.changed.outputs.frontend          }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["frontend"]')
+          [[ "${{ steps.changed.outputs.vbgw_ai           }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["vbgw-ai"]')
+          [[ "${{ steps.changed.outputs.vbgw_bridge       }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["vbgw-bridge"]')
+          [[ "${{ steps.changed.outputs.vbgw_orchestrator }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["vbgw-orchestrator"]')
           echo "services=$arr" >> "$GITHUB_OUTPUT"
 
       - id: tag
@@ -88,11 +94,15 @@ jobs:
         service: ${{ fromJSON(needs.matrix.outputs.services) }}
         include:
           - service: backend
-            context: backend
-          - service: vbgw
-            context: vbgw
+            context: services/backend
           - service: frontend
-            context: frontend
+            context: services/frontend
+          - service: vbgw-ai
+            context: services/vbgw-ai
+          - service: vbgw-bridge
+            context: services/vbgw-bridge
+          - service: vbgw-orchestrator
+            context: services/vbgw-orchestrator
     steps:
       - uses: actions/checkout@v4
 

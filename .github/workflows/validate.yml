@@ -31,18 +31,30 @@ jobs:
         with:
           filters: |
             backend:
-              - 'backend/**'
-            vbgw:
-              - 'vbgw/**'
+              - 'services/backend/**'
             frontend:
-              - 'frontend/**'
+              - 'services/frontend/**'
+            vbgw_ai:
+              - 'services/vbgw-ai/**'
+            vbgw_bridge:
+              - 'services/vbgw-bridge/**'
+            vbgw_orchestrator:
+              - 'services/vbgw-orchestrator/**'
+            freeswitch:
+              - 'services/freeswitch/**'
+            contracts:
+              - 'contracts/**'
             helm:
               - 'deploy/helm/**'
             terraform:
               - 'deploy/terraform/**'
             docker:
-              - '**/Dockerfile'
-              - '**/Dockerfile.*'
+              - 'services/**/Dockerfile'
+              - 'services/**/Dockerfile.*'
+              - 'docker/**'
+            go:
+              - 'services/vbgw-*/**'
+              - 'contracts/gen/go/**'
 
   # ── Helm chart lint + render dry-run (3 charts × 2 envs) ───────────────
   helm-lint:
@@ -53,15 +65,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        chart: [agentoe-backend, agentoe-vbgw, agentoe-frontend]
+        chart: [agentoe-backend, agentoe-frontend, vbgw]
         env: [staging, prod]
         include:
           - chart: agentoe-backend
             values_basename: backend
-          - chart: agentoe-vbgw
-            values_basename: vbgw
           - chart: agentoe-frontend
             values_basename: frontend
+          - chart: vbgw                     # multi-deployment (orchestrator + bridge + freeswitch)
+            values_basename: vbgw
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-helm
@@ -134,7 +146,7 @@ jobs:
         uses: aquasecurity/trivy-action@0.20.0
         with:
           scan-type: fs
-          scan-ref: skeleton
+          scan-ref: .
           scanners: secret,misconfig,vuln
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -158,9 +170,11 @@ jobs:
       fail-fast: false
       matrix:
         dockerfile:
-          - backend/Dockerfile
-          - vbgw/Dockerfile
-          - frontend/Dockerfile
+          - services/backend/Dockerfile
+          - services/frontend/Dockerfile
+          - services/vbgw-ai/Dockerfile
+          - services/vbgw-bridge/Dockerfile
+          - services/vbgw-orchestrator/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: hadolint/hadolint-action@v3.1.0
@@ -195,24 +209,84 @@ jobs:
         working-directory: frontend
         run: npx vitest run
 
+  # ── Go build (vbgw-ai / bridge / orchestrator) ─────────────────────────
+  go-build:
+    name: Go build (${{ matrix.module }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - services/vbgw-ai
+          - services/vbgw-bridge
+          - services/vbgw-orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: go build ./...
+        working-directory: ${{ matrix.module }}
+        run: |
+          go mod download
+          go build ./...
+      - name: go vet ./...
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+      - name: go test -short ./...
+        working-directory: ${{ matrix.module }}
+        run: go test -short ./...
+
+  # ── Contracts gen drift — sync 폐지 후 CI 가 stub stale 검증 ────────
+  contracts-gen:
+    name: Contracts (proto stub drift)
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.23' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Install protoc + plugins
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          pip install grpcio-tools
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+      - name: Regenerate stubs + diff
+        working-directory: contracts
+        run: |
+          rm -rf gen/python gen/go
+          make gen
+          if ! git diff --exit-code gen/; then
+            echo "::error::contracts/gen 가 stale. 'cd contracts && make gen' 후 commit 필요"
+            exit 1
+          fi
+
   # ── 게이트 — 모든 적용 잡이 통과해야 머지 가능 (branch protection 에 등록) ─
   validate-gate:
     name: Validate gate
-    needs: [changes, helm-lint, terraform-validate, trivy-fs, hadolint, frontend-lint]
+    needs: [changes, helm-lint, terraform-validate, trivy-fs, hadolint, frontend-lint, go-build, contracts-gen]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate
         run: |
-          # if=always() 이므로 needs 가 skipped 인 잡은 success 로 간주.
-          for n in helm-lint terraform-validate trivy-fs hadolint frontend-lint; do
-            r="${{ toJSON(needs) }}"
-            echo "$n -> see job summary"
-          done
           fail=0
+          for j in helm-lint terraform-validate trivy-fs hadolint frontend-lint go-build contracts-gen; do
+            r="${{ toJSON(needs) }}"
+          done
           [[ "${{ needs.helm-lint.result        }}" == "failure" ]] && fail=1 || true
           [[ "${{ needs.terraform-validate.result }}" == "failure" ]] && fail=1 || true
           [[ "${{ needs.trivy-fs.result         }}" == "failure" ]] && fail=1 || true
           [[ "${{ needs.hadolint.result         }}" == "failure" ]] && fail=1 || true
           [[ "${{ needs.frontend-lint.result    }}" == "failure" ]] && fail=1 || true
+          [[ "${{ needs.go-build.result         }}" == "failure" ]] && fail=1 || true
+          [[ "${{ needs.contracts-gen.result    }}" == "failure" ]] && fail=1 || true
           [[ $fail -eq 0 ]] || { echo "::error::validate-gate failed"; exit 1; }

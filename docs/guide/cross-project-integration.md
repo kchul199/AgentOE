@@ -1,3 +1,10 @@
+> ⚠️ **이 문서는 monorepo 통합 (Phase M, 2026-04-28) 후 history 보존용으로만 남겨두었습니다.**
+> 옛 AgenticOE_v2 ↔ vbgw_v2 cross-project 통합 가이드. **현재는 단일 repo `agentoe`**.
+> 새 작업은 `docs/HANDOFF.md` 와 `docs/guide/monorepo-migration-plan.md` 참고.
+
+---
+
+
 # Guide — AgenticOE_v2 ↔ vbgw_v2 통합
 
 > 두 프로젝트는 **같은 사람** (charls) 이 owner 이지만 **별도 git 저장소**.
