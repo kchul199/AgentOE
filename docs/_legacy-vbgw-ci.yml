@@ -1,0 +1,46 @@
+name: VBGW CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23' # Hardcore Developer standard
+
+    - name: Run Orchestrator Unit Tests
+      run: |
+        cd vbgw-freeswitch/orchestrator
+        go test -v -race -short ./...
+
+    - name: Run Bridge Unit Tests
+      run: |
+        cd vbgw-freeswitch/bridge
+        # Assumes ONNX runtime dependencies are configured or test stubs are present
+        go test -v -race -short ./...
+
+  fuzz:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+        
+    - name: Run Capacity Allocation Fuzz Tests
+      run: |
+        cd vbgw-freeswitch/orchestrator
+        # Run fuzzing for 60 seconds with deadlock detection
+        go test -fuzz=FuzzMemoryStore_Capacity -fuzztime=60s ./internal/session

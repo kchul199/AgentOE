@@ -1,0 +1,54 @@
+# ──────────────────────────────────────────────────────────────────────────
+# vbgw chart  ·  production override  (multi-deployment)
+# ──────────────────────────────────────────────────────────────────────────
+
+orchestrator:
+  replicaCount: 3
+  image:
+    repository: REPLACE_ECR_REGISTRY/agentoe-prod/vbgw-orchestrator
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 1Gi
+  service:
+    type: ClusterIP
+    port: 8080
+
+bridge:
+  replicaCount: 10                       # prod 기본 — cutover 단계에서 stable/canary 분배
+  image:
+    repository: REPLACE_ECR_REGISTRY/agentoe-prod/vbgw-bridge
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # cutover 완료 후 (Stage D) 이 값을 agentoe-backend 로 변경.
+  # 현재 default = 자체 vbgw-ai (cutover 시작 전 baseline).
+  grpcAiAddr: "ai-service:50051"
+  grpcAiTLS: false
+
+  canary:
+    enabled: false                       # cutover Stage B (10%) 시작 시 true
+    replicaCount: 1                      # stable 9 + canary 1
+    grpcAiAddr: "agentoe-backend.agentoe.svc.cluster.local:50051"
+    grpcAiTLS: false
+
+freeswitch:
+  replicaCount: 3
+  image:
+    repository: signalwire/freeswitch
+    tag: "1.10.12"
+  service:
+    type: LoadBalancer
+    sipPort: 5060
+
+redis:
+  deploy: false
+  host: "redis-master.agentoe.svc.cluster.local"
+
+ingress:
+  enabled: false

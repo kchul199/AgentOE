@@ -1,0 +1,128 @@
+name: "Build, scan, and push image to ECR"
+description: |
+  단일 서비스의 Docker 이미지를 빌드하고 Trivy 이미지 스캔 후 ECR 에 push 한다.
+  IMMUTABLE 태그 정책이므로 동일 sha 재푸시는 실패. retry 시 매번 새 sha.
+  GHA 캐시 사용 → buildx 레이어 재활용.
+
+inputs:
+  service:
+    description: "서비스 이름 (backend / vbgw / frontend) — repo 이름 = ${ecr-prefix}/${service}"
+    required: true
+  context:
+    description: "Docker build context 경로 (예: backend)"
+    required: true
+  dockerfile:
+    description: "Dockerfile 경로"
+    required: false
+    default: "Dockerfile"
+  ecr-registry:
+    description: "ECR 레지스트리 (xxx.dkr.ecr.<region>.amazonaws.com)"
+    required: true
+  ecr-prefix:
+    description: "Repo prefix (예: agentoe-staging) — 결과 repo = ${ecr-prefix}/${service}"
+    required: true
+  image-tag:
+    description: "이미지 태그 (보통 git sha 또는 git tag). IMMUTABLE."
+    required: true
+  build-args:
+    description: "추가 build args (KEY=VAL multiline)"
+    required: false
+    default: ""
+  scan-severity:
+    description: "Trivy 게이트 — 발견 시 실패할 severity 레벨"
+    required: false
+    default: "CRITICAL,HIGH"
+  push:
+    description: "푸시 여부 — PR validate 시엔 false"
+    required: false
+    default: "true"
+
+outputs:
+  image:
+    description: "최종 이미지 reference"
+    value: "${{ steps.meta.outputs.image }}"
+  digest:
+    description: "이미지 sha256 digest (immutable 검증용)"
+    value: "${{ steps.build.outputs.digest }}"
+
+runs:
+  using: composite
+  steps:
+    - name: Compute metadata
+      id: meta
+      shell: bash
+      run: |
+        IMAGE="${{ inputs.ecr-registry }}/${{ inputs.ecr-prefix }}/${{ inputs.service }}:${{ inputs.image-tag }}"
+        echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+        echo "::notice title=Image::Building $IMAGE"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to ECR
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build (load locally for scan)
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+        load: true                      # 스캔용 로컬 로드 — push 는 별도 단계
+        push: false
+        tags: ${{ steps.meta.outputs.image }}
+        cache-from: type=gha,scope=${{ inputs.service }}
+        cache-to:   type=gha,scope=${{ inputs.service }},mode=max
+        build-args: ${{ inputs.build-args }}
+        provenance: false               # OCI provenance 끄면 ECR 호환성 ↑
+
+    - name: Trivy image scan (block on ${{ inputs.scan-severity }})
+      uses: aquasecurity/trivy-action@0.20.0
+      with:
+        image-ref: ${{ steps.meta.outputs.image }}
+        format: table
+        exit-code: "1"
+        ignore-unfixed: true
+        severity: ${{ inputs.scan-severity }}
+        vuln-type: "os,library"
+        timeout: 10m
+
+    - name: Trivy image scan (SARIF for code-scanning)
+      if: always()
+      uses: aquasecurity/trivy-action@0.20.0
+      with:
+        image-ref: ${{ steps.meta.outputs.image }}
+        format: sarif
+        output: trivy-${{ inputs.service }}.sarif
+        ignore-unfixed: true
+        severity: "CRITICAL,HIGH,MEDIUM"
+        timeout: 10m
+
+    - name: Upload SARIF
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: trivy-${{ inputs.service }}.sarif
+        category: trivy-${{ inputs.service }}
+
+    - name: Push (only if scan passed and push=true)
+      if: inputs.push == 'true'
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.context }}/${{ inputs.dockerfile }}
+        push: true
+        tags: ${{ steps.meta.outputs.image }}
+        cache-from: type=gha,scope=${{ inputs.service }}
+        build-args: ${{ inputs.build-args }}
+        provenance: false
+
+    - name: Verify pushed digest
+      if: inputs.push == 'true'
+      shell: bash
+      run: |
+        # ECR repository 의 IMMUTABLE 정책이 우리를 보호 — 같은 태그 재푸시 차단.
+        aws ecr describe-images \
+          --repository-name "${{ inputs.ecr-prefix }}/${{ inputs.service }}" \
+          --image-ids imageTag=${{ inputs.image-tag }} \
+          --query 'imageDetails[0].imageDigest' --output text

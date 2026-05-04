@@ -1,0 +1,33 @@
+{
+  "name": "agentoe-scenario-builder",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AgentOE 시나리오 빌더 GUI — 테넌트 멀티테넌시, React Flow 기반 노드 에디터, DSL 직렬화/검증",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --port 5173",
+    "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "reactflow": "^11.11.4",
+    "zod": "^3.23.8",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "@vitest/coverage-v8": "^2.1.4",
+    "eslint": "^9.13.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  }
+}

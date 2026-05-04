@@ -1,0 +1,84 @@
+<!--
+  default.xml — Inbound Call Dialplan
+  변경이력: v1.0.0 | 2026-04-07 | [Implementer] | 최초 생성
+  변경이력: v1.1.0 | 2026-04-07 | [Implementer] | P-01 ring_ready 순서 교정
+  변경이력: v1.2.0 | 2026-04-07 | [Implementer] | P-06 audio_fork 실패 fallback
+  변경이력: v1.3.0 | 2026-04-07 | [Implementer] | P-09 183 Early Media 지원
+  변경이력: v1.4.0 | 2026-04-07 | [Implementer] | Q-01 Early Media 단일 extension 통합
+  변경이력: v1.5.0 | 2026-04-07 | [Implementer] | Q-07 start_dtmf를 audio_fork 앞으로 이동
+  변경이력: v1.6.0 | 2026-04-07 | [Implementer] | R-01 단일 condition으로 병합 (AND 평가 문제 해소)
+-->
+<include>
+  <context name="default">
+
+    <!--
+      Voicebot Inbound Handler
+      R-01: 단일 condition 내에서 exec 앱으로 Early Media 분기 처리.
+      multi-condition AND 평가 문제를 원천 차단합니다.
+    -->
+    <extension name="voicebot-inbound">
+      <condition field="destination_number" expression="^(.+)$">
+        
+        <!-- 최적화: Jitter Buffer & Media 설정 -->
+        <action application="set" data="jitterbuffer_msec=60:120:20"/>
+        
+        <!-- AI 가용량 체크 (Orchestrator가 세션 수 초과 시 X-VBGW-Capacity-Full 헤더를 준 경우) -->
+        <!-- 용량 초과 시 valet_parking Lot 8000으로 보내 대기시킴 -->
+        <action application="set" data="capacity_full=${sip_h_X-VBGW-Capacity-Full}"/>
+        <condition field="${capacity_full}" expression="^true$">
+          <action application="valet_park" data="ai_queue 8000"/>
+        </condition>
+
+        <!-- Step 1: 180 Ringing -->
+        <action application="ring_ready"/>
+
+        <!-- Step 2: AGC & DTMF 감지 -->
+        <action application="agc" data="1"/>
+        <action application="start_dtmf"/>
+
+        <!-- Step 3: Audio streaming 시작 -->
+        <action application="set" data="audio_fork_url=$${audio_fork_scheme}://$${bridge_host}:$${bridge_ws_port}/audio/${uuid}"/>
+        <action application="audio_fork" data="${audio_fork_url} 16000 mono"/>
+
+        <!-- Step 4: Answer & Park -->
+        <action application="answer"/>
+        <action application="set" data="park_timeout=5"/>
+        <action application="park"/>
+        
+        <!-- Failover: 상담원 전용 대기열로 즉시 이동 -->
+        <action application="transfer" data="agent_transfer XML default"/>
+      </condition>
+    </extension>
+
+    <!-- 상담원 전환 전용 Extension -->
+    <extension name="agent_transfer">
+      <condition field="destination_number" expression="^agent_transfer$">
+        <!-- 미디어 처리 최적화: AI 스트리밍 중단 (대역폭 절감) -->
+        <action application="stop_audio_fork"/>
+        
+        <!-- 상담원 큐 진입 -->
+        <action application="set" data="callcenter_name=ai_support_queue"/>
+        <action application="callcenter" data="${callcenter_name}"/>
+      </condition>
+    </extension>
+
+  </context>
+
+  <!--
+    Early Media / 일반 응답 분기용 features context
+    execute_extension에서 호출됩니다.
+  -->
+  <context name="features">
+    <extension name="voicebot-early-media-branch">
+      <!-- Early Media 경로 -->
+      <condition field="${early_media}" expression="^true$">
+        <action application="pre_answer"/>
+        <action application="playback" data="$${hold_music}"/>
+        <action application="answer"/>
+        <!-- 일반 경로 (Early Media 아닌 경우) -->
+        <anti-action application="sleep" data="$${answer_delay_ms}"/>
+        <anti-action application="answer"/>
+      </condition>
+    </extension>
+  </context>
+</include>

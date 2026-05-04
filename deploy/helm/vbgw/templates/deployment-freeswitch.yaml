@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vbgw.fullname" . }}-freeswitch
+  labels:
+    app.kubernetes.io/name: freeswitch
+spec:
+  replicas: {{ .Values.freeswitch.replicaCount }}
+  strategy:
+    type: Recreate  # FreeSWITCH binds to SIP ports; rolling is not safe
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: freeswitch
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: freeswitch
+    spec:
+      containers:
+        - name: freeswitch
+          image: "{{ .Values.freeswitch.image.repository }}:{{ .Values.freeswitch.image.tag }}"
+          ports:
+            - name: sip-udp
+              containerPort: {{ .Values.freeswitch.service.sipPort }}
+              protocol: UDP
+            - name: sip-tcp
+              containerPort: {{ .Values.freeswitch.service.sipPort }}
+              protocol: TCP
+            - name: esl
+              containerPort: 8021
+              protocol: TCP
+          env:
+            - name: ESL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vbgw.fullname" . }}-secrets
+                  key: esl-password
+                  optional: true
+          livenessProbe:
+            tcpSocket:
+              port: esl
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: esl
+            initialDelaySeconds: 25
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "512Mi"
+            limits:
+              cpu: "4000m"
+              memory: "2Gi"
+          volumeMounts:
+            - name: fs-config
+              mountPath: /etc/freeswitch
+            - name: recordings
+              mountPath: /recordings
+      volumes:
+        - name: fs-config
+          configMap:
+            name: {{ include "vbgw.fullname" . }}-freeswitch-config
+            optional: true
+        - name: recordings
+          emptyDir:
+            sizeLimit: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vbgw.fullname" . }}-freeswitch
+spec:
+  type: {{ .Values.freeswitch.service.type }}
+  ports:
+    - port: {{ .Values.freeswitch.service.sipPort }}
+      targetPort: sip-udp
+      protocol: UDP
+      name: sip-udp
+    - port: {{ .Values.freeswitch.service.sipPort }}
+      targetPort: sip-tcp
+      protocol: TCP
+      name: sip-tcp
+    - port: 8021
+      targetPort: esl
+      protocol: TCP
+      name: esl
+  selector:
+    app.kubernetes.io/name: freeswitch

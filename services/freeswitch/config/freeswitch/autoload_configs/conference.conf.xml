@@ -1,0 +1,45 @@
+<!--
+  conference.conf.xml — Conference Bridge + Eavesdrop 프로파일
+  변경이력: v1.0.0 | 2026-04-09 | [Implementer] | 최초 생성 | 감독자 모니터링용
+
+  사용 시나리오:
+  1. 감독자 감청 (eavesdrop): 상담원 통화를 들으면서 개입 가능
+  2. 3자 통화 (conference): 감독자가 직접 통화에 참여
+  3. 코칭 (whisper): 감독자 음성이 상담원에게만 전달
+
+  ESL 명령:
+    eavesdrop:  uuid_eavesdrop <supervisor_uuid> <target_uuid>
+    conference: conference vbgw-<session_id> ...
+-->
+<configuration name="conference.conf" description="Conference">
+  <profiles>
+
+    <!-- 기본 감독자 모니터링 프로파일 -->
+    <profile name="supervisor">
+      <param name="rate" value="16000"/>
+      <param name="interval" value="20"/>
+      <param name="energy-level" value="100"/>
+      <param name="comfort-noise" value="false"/>
+      <param name="moh-sound" value="$${hold_music}"/>
+      <param name="max-members" value="3"/>
+      <param name="caller-id-name" value="Supervisor"/>
+      <param name="suppress-events" value="start-talking,stop-talking"/>
+      <!-- 감독자 입장 시 비프 없음 (고객 인지 방지) -->
+      <param name="enter-sound" value=""/>
+      <param name="exit-sound" value=""/>
+    </profile>
+
+    <!-- 3자 통화 프로파일 (모두 양방향 통화) -->
+    <profile name="three-way">
+      <param name="rate" value="16000"/>
+      <param name="interval" value="20"/>
+      <param name="energy-level" value="100"/>
+      <param name="comfort-noise" value="false"/>
+      <param name="max-members" value="3"/>
+      <param name="caller-id-name" value="Conference"/>
+      <param name="enter-sound" value="tone_stream://%(200,0,500,600,700)"/>
+      <param name="exit-sound" value="tone_stream://%(500,0,300,200,100,50,25)"/>
+    </profile>
+
+  </profiles>
+</configuration>

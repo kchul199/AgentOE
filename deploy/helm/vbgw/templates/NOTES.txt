@@ -1,0 +1,34 @@
+╔══════════════════════════════════════════════════════════╗
+║            VBGW (VoiceBot Gateway) v2 설치 완료           ║
+╚══════════════════════════════════════════════════════════╝
+
+1. Orchestrator API 접근:
+{{- if .Values.ingress.enabled }}
+  {{- range .Values.ingress.hosts }}
+  http://{{ .host }}
+  {{- end }}
+{{- else }}
+  kubectl port-forward svc/{{ include "vbgw.fullname" . }}-orchestrator 8080:{{ .Values.orchestrator.service.port }}
+  http://localhost:8080
+{{- end }}
+
+2. 주요 엔드포인트:
+  - 헬스 체크:     GET  /live, /ready, /health
+  - 통화 생성:     POST /api/v1/calls
+  - DTMF 전송:    POST /api/v1/calls/{id}/dtmf
+  - 콜 전환:       POST /api/v1/calls/{id}/transfer
+  - 녹취 시작/종료: POST /api/v1/calls/{id}/record/start|stop
+  - 관제 대시보드:  GET  /api/v1/admin/sessions/active
+  - Prometheus:    GET  /metrics
+
+3. 인증:
+  모든 API 요청에 Bearer 토큰이 필요합니다:
+    Authorization: Bearer <ADMIN_API_KEY>
+
+4. 카나리 배포 활성화:
+  helm upgrade {{ .Release.Name }} . \
+    --set orchestrator.canary.enabled=true \
+    --set orchestrator.canary.weight=10
+
+5. OpenAPI 문서:
+  docs/openapi.yaml 을 참조하시거나 Swagger UI에 임포트하세요.

@@ -1,0 +1,14 @@
+<configuration name="valet_parking.conf" description="Valet Parking">
+  <settings>
+    <!-- 대기 중 안내 멘트 기본값 -->
+    <param name="default-announce" value="phrase:voicemail_fail_message"/>
+  </settings>
+  <valet_lots>
+    <!-- AI 전용 대기열 (Lot 8000)
+         Orchestrator는 가용 슬롯이 생기면 이 Lot에서 콜을 꺼내어 AI로 보냅니다. -->
+    <lot name="ai_queue" start="8001" end="8999">
+      <param name="music-on-hold" value="$${hold_music}"/>
+      <param name="max-timeout" value="300"/> <!-- 최대 5분 대기 -->
+    </lot>
+  </valet_lots>
+</configuration>

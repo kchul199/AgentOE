@@ -1,0 +1,135 @@
+version: "3.9"
+
+services:
+  # ===== Tier 1: FreeSWITCH Media Engine =====
+  freeswitch:
+    image: drachtio/drachtio-freeswitch-mrf:latest
+    platform: linux/amd64
+    container_name: vbgw-freeswitch
+    privileged: true
+    # Force config path and ensure it stays in foreground
+    entrypoint: ["/usr/local/freeswitch/bin/freeswitch", "-nc", "-nf", "-nonat", "-conf", "/etc/freeswitch", "-log", "/usr/local/freeswitch/log", "-db", "/usr/local/freeswitch/db"]
+    restart: unless-stopped
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "5061:5061/tcp"
+      - "8021:8021/tcp"
+      - "16384-16484:16384-16484/udp"
+    networks:
+      - vbgw-net
+    volumes:
+      - ./config/freeswitch:/etc/freeswitch
+      - ./recordings:/recordings
+      - ./logs/freeswitch:/var/log/freeswitch
+    environment:
+      - SIP_PORT=${SIP_PORT:-5060}
+      - SIP_TLS_PORT=${SIP_TLS_PORT:-5061}
+      - SIP_TLS_ONLY=${SIP_TLS_ONLY:-false}
+      - SRTP_MODE=${SRTP_MODE:-optional}
+      - EXTERNAL_RTP_IP=${EXTERNAL_RTP_IP:-192.168.219.123}
+      - EXTERNAL_SIP_IP=${EXTERNAL_SIP_IP:-192.168.219.123}
+      - ESL_PASSWORD=${ESL_PASSWORD}
+    healthcheck:
+      test: ["CMD", "/usr/local/freeswitch/bin/fs_cli", "-p", "ClueConSecretDev", "-x", "status"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ===== Tier 2: Redis State Store =====
+  redis:
+    image: redis:7.4-alpine
+    container_name: vbgw-redis
+    restart: unless-stopped
+    command: ["redis-server", "--port", "16379", "--save", "60", "1", "--loglevel", "warning"]
+    ports:
+      - "16379:16379"
+    networks:
+      - vbgw-net
+    volumes:
+      - ./redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "16379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===== Tier 3: Bridge (VAD/Audio Fork) =====
+  bridge:
+    build:
+      context: ./bridge
+      dockerfile: Dockerfile
+    image: vbgw-freeswitch-bridge:latest
+    container_name: vbgw-bridge
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+      - "8092:8092"
+    networks:
+      - vbgw-net
+    volumes:
+      - ./models:/models
+    environment:
+      - BRIDGE_INTERNAL_PORT=${BRIDGE_INTERNAL_PORT:-8092}
+      - BRIDGE_WS_PORT=${BRIDGE_WS_PORT:-8090}
+      - AI_GRPC_ADDR=vbgw-ai:8091
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ORT_API_VERSION=17
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "echo > /dev/tcp/127.0.0.1/8091"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===== Tier 4: Orchestrator (Session Manager) =====
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    image: vbgw-freeswitch-orchestrator:latest
+    container_name: vbgw-orchestrator
+    restart: unless-stopped
+    depends_on:
+      freeswitch:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - vbgw-net
+    environment:
+      - HTTP_PORT=${HTTP_PORT:-8080}
+      - ESL_HOST=${ESL_HOST:-freeswitch}
+      - ESL_PORT=${ESL_PORT:-8021}
+      - ESL_PASSWORD=${ESL_PASSWORD}
+      - BRIDGE_INTERNAL_PORT=${BRIDGE_INTERNAL_PORT:-8092}
+      - BRIDGE_HOST=${BRIDGE_HOST:-bridge}
+      - AI_GRPC_ADDR=${AI_GRPC_ADDR:-vbgw-ai:8091}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  vbgw-ai:
+    container_name: vbgw-ai
+    platform: linux/arm64
+    build:
+      context: ../vbgw-ai
+      dockerfile: Dockerfile
+    ports:
+      - "8091:8091"
+    networks:
+      - vbgw-net
+    env_file:
+      - ../vbgw-ai/.env
+    environment:
+      - PORT=8091
+      - LOG_LEVEL=debug
+    restart: always
+
+networks:
+  vbgw-net:
+    driver: bridge

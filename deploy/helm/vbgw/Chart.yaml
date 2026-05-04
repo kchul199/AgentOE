@@ -1,0 +1,6 @@
+apiVersion: v2
+name: vbgw
+description: A Helm chart for deploying the VoiceBot Gateway with Canary deployment support.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

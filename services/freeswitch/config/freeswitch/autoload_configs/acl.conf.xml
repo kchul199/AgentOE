@@ -1,0 +1,37 @@
+<!--
+  acl.conf.xml — SIP Access Control Lists
+  변경이력: v1.0.0 | 2026-04-09 | [Implementer] | 최초 생성 | PBX IP ACL
+
+  mod_acl을 사용하여 인바운드 SIP INVITE를 PBX/SBC IP로만 제한합니다.
+  허용되지 않은 IP의 INVITE는 403 Forbidden으로 거부됩니다.
+
+  환경변수:
+    PBX_ACL_IPS: 쉼표 구분 CIDR 목록 (예: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")
+    기본값: RFC1918 사설망 전체 (개발 환경)
+    프로덕션: 반드시 PBX/SBC의 실제 IP로 좁혀야 합니다.
+-->
+<configuration name="acl.conf" description="Network Lists">
+  <network-lists>
+
+    <!-- Loopback (ESL, internal HTTP) — 항상 허용 -->
+    <list name="loopback.auto" default="deny">
+      <node type="allow" cidr="127.0.0.0/8"/>
+      <node type="allow" cidr="::1/128"/>
+    </list>
+
+    <!--
+      PBX/SBC ACL — 인바운드 SIP 제한
+      프로덕션에서는 PBX_ACL_IPS 환경변수로 정확한 IP를 설정하세요.
+      예: PBX_ACL_IPS=10.10.1.100/32,10.10.1.101/32
+    -->
+    <list name="pbx-acl" default="deny">
+      <!-- PBX primary -->
+      <node type="allow" cidr="$${pbx_acl_ip1}"/>
+      <!-- PBX standby (if configured) -->
+      <node type="allow" cidr="$${pbx_acl_ip2}"/>
+      <!-- Loopback for local testing -->
+      <node type="allow" cidr="127.0.0.0/8"/>
+    </list>
+
+  </network-lists>
+</configuration>

@@ -1,0 +1,292 @@
+name: Validate
+
+# PR + main 푸시에서 실행. 빠른 lint / 정적 검증 묶음.
+# (앱 단위 테스트는 ci.yml 이 책임)
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 변경 경로 감지 → 다른 잡들이 needs 로 참조 ─────────────────────────
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend:   ${{ steps.f.outputs.backend }}
+      vbgw:      ${{ steps.f.outputs.vbgw }}
+      frontend:  ${{ steps.f.outputs.frontend }}
+      helm:      ${{ steps.f.outputs.helm }}
+      terraform: ${{ steps.f.outputs.terraform }}
+      docker:    ${{ steps.f.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: f
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'services/backend/**'
+            frontend:
+              - 'services/frontend/**'
+            vbgw_ai:
+              - 'services/vbgw-ai/**'
+            vbgw_bridge:
+              - 'services/vbgw-bridge/**'
+            vbgw_orchestrator:
+              - 'services/vbgw-orchestrator/**'
+            freeswitch:
+              - 'services/freeswitch/**'
+            contracts:
+              - 'contracts/**'
+            helm:
+              - 'deploy/helm/**'
+            terraform:
+              - 'deploy/terraform/**'
+            docker:
+              - 'services/**/Dockerfile'
+              - 'services/**/Dockerfile.*'
+              - 'docker/**'
+            go:
+              - 'services/vbgw-*/**'
+              - 'contracts/gen/go/**'
+
+  # ── Helm chart lint + render dry-run (3 charts × 2 envs) ───────────────
+  helm-lint:
+    name: Helm lint + render
+    needs: changes
+    if: needs.changes.outputs.helm == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        chart: [agentoe-backend, agentoe-frontend, vbgw]
+        env: [staging, prod]
+        include:
+          - chart: agentoe-backend
+            values_basename: backend
+          - chart: agentoe-frontend
+            values_basename: frontend
+          - chart: vbgw                     # multi-deployment (orchestrator + bridge + freeswitch)
+            values_basename: vbgw
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-helm
+
+      - name: helm lint
+        working-directory: deploy/helm
+        run: |
+          helm lint "./${{ matrix.chart }}" \
+            -f "values/${{ matrix.env }}/${{ matrix.values_basename }}.values.yaml"
+
+      - name: helm template (manifest 만 생성, validate 불가 — 클러스터 없음)
+        working-directory: deploy/helm
+        run: |
+          helm template "${{ matrix.chart }}-${{ matrix.env }}" "./${{ matrix.chart }}" \
+            -f "values/${{ matrix.env }}/${{ matrix.values_basename }}.values.yaml" \
+            --debug > /tmp/render.yaml
+          wc -l /tmp/render.yaml
+
+      - name: kubeconform (CRD-aware schema 검증)
+        run: |
+          KCV=v0.6.7
+          curl -sLO "https://github.com/yannh/kubeconform/releases/download/${KCV}/kubeconform-linux-amd64.tar.gz"
+          tar xzf kubeconform-linux-amd64.tar.gz
+          ./kubeconform -strict -ignore-missing-schemas \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            /tmp/render.yaml
+
+  # ── Terraform fmt + validate (모든 environment + module) ────────────────
+  terraform-validate:
+    name: Terraform fmt + validate
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      - name: terraform fmt -check (recursive)
+        working-directory: deploy/terraform
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate (각 env)
+        working-directory: deploy/terraform
+        run: |
+          set -e
+          for d in environments/*/; do
+            echo "::group::validate $d"
+            ( cd "$d" && terraform init -backend=false -input=false && terraform validate -no-color )
+            echo "::endgroup::"
+          done
+
+      - name: tflint
+        uses: terraform-linters/setup-tflint@v4
+        with: { tflint_version: latest }
+      - run: |
+          cd deploy/terraform
+          tflint --recursive --format compact
+
+  # ── Trivy filesystem scan (시크릿 / IaC misconfig) ─────────────────────
+  trivy-fs:
+    name: Trivy fs (secrets + IaC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret,misconfig,vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: trivy-fs.sarif
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  # ── Hadolint (Dockerfile 정적 검사) ────────────────────────────────────
+  hadolint:
+    name: Hadolint
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile:
+          - services/backend/Dockerfile
+          - services/frontend/Dockerfile
+          - services/vbgw-ai/Dockerfile
+          - services/vbgw-bridge/Dockerfile
+          - services/vbgw-orchestrator/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ matrix.dockerfile }}
+          failure-threshold: warning
+          ignore: DL3008,DL3018         # apt/apk version pinning — base image 가 이미 핀 됨
+
+  # ── Frontend lint + type check (Vite/TS) ────────────────────────────────
+  frontend-lint:
+    name: Frontend lint
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Vitest (단위)
+        working-directory: frontend
+        run: npx vitest run
+
+  # ── Go build (vbgw-ai / bridge / orchestrator) ─────────────────────────
+  go-build:
+    name: Go build (${{ matrix.module }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - services/vbgw-ai
+          - services/vbgw-bridge
+          - services/vbgw-orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: go build ./...
+        working-directory: ${{ matrix.module }}
+        run: |
+          go mod download
+          go build ./...
+      - name: go vet ./...
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+      - name: go test -short ./...
+        working-directory: ${{ matrix.module }}
+        run: go test -short ./...
+
+  # ── Contracts gen drift — sync 폐지 후 CI 가 stub stale 검증 ────────
+  contracts-gen:
+    name: Contracts (proto stub drift)
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.23' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Install protoc + plugins
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          pip install grpcio-tools
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+      - name: Regenerate stubs + diff
+        working-directory: contracts
+        run: |
+          rm -rf gen/python gen/go
+          make gen
+          if ! git diff --exit-code gen/; then
+            echo "::error::contracts/gen 가 stale. 'cd contracts && make gen' 후 commit 필요"
+            exit 1
+          fi
+
+  # ── 게이트 — 모든 적용 잡이 통과해야 머지 가능 (branch protection 에 등록) ─
+  validate-gate:
+    name: Validate gate
+    needs: [changes, helm-lint, terraform-validate, trivy-fs, hadolint, frontend-lint, go-build, contracts-gen]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate
+        run: |
+          fail=0
+          for j in helm-lint terraform-validate trivy-fs hadolint frontend-lint go-build contracts-gen; do
+            r="${{ toJSON(needs) }}"
+          done
+          [[ "${{ needs.helm-lint.result        }}" == "failure" ]] && fail=1 || true
+          [[ "${{ needs.terraform-validate.result }}" == "failure" ]] && fail=1 || true
+          [[ "${{ needs.trivy-fs.result         }}" == "failure" ]] && fail=1 || true
+          [[ "${{ needs.hadolint.result         }}" == "failure" ]] && fail=1 || true
+          [[ "${{ needs.frontend-lint.result    }}" == "failure" ]] && fail=1 || true
+          [[ "${{ needs.go-build.result         }}" == "failure" ]] && fail=1 || true
+          [[ "${{ needs.contracts-gen.result    }}" == "failure" ]] && fail=1 || true
+          [[ $fail -eq 0 ]] || { echo "::error::validate-gate failed"; exit 1; }

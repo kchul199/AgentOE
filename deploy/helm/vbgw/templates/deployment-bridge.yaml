@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vbgw.fullname" . }}-bridge
+  labels:
+    app.kubernetes.io/name: bridge
+spec:
+  replicas: {{ .Values.bridge.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bridge
+    spec:
+      containers:
+        - name: bridge
+          image: "{{ .Values.bridge.image.repository }}:{{ .Values.bridge.image.tag }}"
+          ports:
+            - name: ws
+              containerPort: 8090
+              protocol: TCP
+            - name: internal
+              containerPort: 8091
+              protocol: TCP
+          env:
+            - name: ORT_LIB_PATH
+              value: "/usr/local/lib/libonnxruntime.so"
+            - name: GRPC_AI_ADDR
+              value: "{{ .Values.bridge.grpcAiAddr | default \"ai-service:50051\" }}"
+          livenessProbe:
+            tcpSocket:
+              port: ws
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: ws
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: vad-model
+              mountPath: /models
+              readOnly: true
+      volumes:
+        - name: vad-model
+          configMap:
+            name: {{ include "vbgw.fullname" . }}-vad-model
+            optional: true

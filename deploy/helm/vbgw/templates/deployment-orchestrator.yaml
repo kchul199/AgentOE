@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vbgw.fullname" . }}-orchestrator
+  labels:
+    app.kubernetes.io/name: orchestrator
+spec:
+  replicas: {{ .Values.orchestrator.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 50%
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orchestrator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: orchestrator
+    spec:
+      containers:
+        - name: orchestrator
+          image: "{{ .Values.orchestrator.image.repository }}:{{ .Values.orchestrator.image.tag }}"
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: REDIS_ADDR
+              value: "{{ .Values.redis.host }}:6379"
+            - name: HTTP_PORT
+              value: "8080"
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.orchestrator.resources | nindent 12 }}

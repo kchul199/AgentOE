@@ -1,0 +1,11 @@
+.git
+.gitignore
+node_modules
+legacy
+codex_project
+docs
+recordings
+logs
+bridge/bin
+orchestrator/bin
+vbgw-ai/bin
