@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AgentOE — Scenario Builder (Mockup)</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --border: #d9dee4;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --accent: #1f497d;
+    --accent-light: #e6edf7;
+    --intent: #7c3aed;
+    --llm: #2563eb;
+    --tool: #059669;
+    --branch: #d97706;
+    --transfer: #dc2626;
+    --wait: #9333ea;
+    --context: #0891b2;
+    --end: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  /* ── 상단 바 ── */
+  .topbar {
+    height: 52px;
+    background: #ffffff;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 14px;
+  }
+  .topbar .logo { font-weight: 700; color: var(--accent); font-size: 16px; }
+  .topbar select, .topbar input {
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 8px;
+    font-size: 13px;
+    background: #fff;
+  }
+  .topbar .spacer { flex: 1; }
+  .topbar .ver { font-size: 12px; color: var(--muted); }
+  .btn {
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .btn:hover { background: var(--accent-light); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .btn.warn { background: #fff; color: #dc2626; border-color: #f3c2c2; }
+
+  /* ── 레이아웃 ── */
+  .shell { display: grid; grid-template-columns: 220px 1fr 320px; height: calc(100vh - 52px - 32px); }
+
+  /* ── 팔레트 (좌) ── */
+  .palette {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 12px 10px;
+    overflow-y: auto;
+  }
+  .palette h4 { margin: 8px 2px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .node-card {
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    user-select: none;
+    transition: all 120ms;
+  }
+  .node-card:active { cursor: grabbing; }
+  .node-card:hover { border-color: var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+  .node-card .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .node-card .label { font-weight: 600; }
+  .node-card .hint { font-size: 11px; color: var(--muted); margin-left: auto; }
+
+  /* ── 캔버스 (중) ── */
+  .canvas-wrap { position: relative; background: #eef1f6; overflow: auto; }
+  .canvas {
+    position: relative;
+    width: 1600px;
+    height: 900px;
+    background-image:
+      radial-gradient(circle at 1px 1px, #cfd4dc 1px, transparent 0);
+    background-size: 24px 24px;
+  }
+  svg.edges { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  /* 노드 */
+  .n {
+    position: absolute;
+    min-width: 170px;
+    background: #fff;
+    border: 1.5px solid var(--accent);
+    border-radius: 10px;
+    padding: 10px 12px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    cursor: grab;
+    user-select: none;
+  }
+  .n .t { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .n .l { font-size: 14px; font-weight: 600; margin-top: 2px; }
+  .n.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .n.type-intent   { border-color: var(--intent); }
+  .n.type-llm      { border-color: var(--llm); }
+  .n.type-tool     { border-color: var(--tool); }
+  .n.type-branch   { border-color: var(--branch); background: linear-gradient(to bottom, #fff, #fff7ed); }
+  .n.type-transfer { border-color: var(--transfer); }
+  .n.type-wait     { border-color: var(--wait); border-style: dashed; }
+  .n.type-context  { border-color: var(--context); }
+  .n.type-end      { border-color: var(--end); background: #fafafa; }
+
+  .handle {
+    position: absolute;
+    width: 10px; height: 10px;
+    background: #fff;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .handle.top { top: 0; }
+  .handle.bottom { bottom: -2px; top: auto; }
+
+  /* ── Inspector (우) ── */
+  .inspector {
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+  }
+  .inspector .hd {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 700;
+    font-size: 13px;
+    background: var(--accent-light);
+    color: var(--accent);
+  }
+  .inspector .body { padding: 14px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
+  .field input, .field textarea, .field select {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  .field textarea { resize: vertical; min-height: 60px; }
+  .chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    background: var(--accent-light);
+    color: var(--accent);
+    margin-right: 4px;
+    margin-bottom: 4px;
+  }
+
+  /* ── 하단 상태/검증 바 ── */
+  .statusbar {
+    height: 32px;
+    background: #fff;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    gap: 12px;
+    font-size: 12px;
+  }
+  .dot-status {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+  }
+  .issue { color: #b91c1c; }
+  .warn  { color: #b45309; }
+
+  .kbd {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: #f3f4f6;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 11px;
+  }
+
+  /* tiny scrollbars */
+  .palette::-webkit-scrollbar, .inspector::-webkit-scrollbar { width: 8px; }
+  .palette::-webkit-scrollbar-thumb, .inspector::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+
+  details > summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">AgentOE · Scenario Builder</div>
+  <div>
+    <label style="font-size:11px;color:#6b7280;margin-right:4px;">Tenant</label>
+    <select id="tenant">
+      <option>t_acme</option>
+      <option>t_orion</option>
+      <option>t_demo</option>
+    </select>
+  </div>
+  <div>
+    <label style="font-size:11px;color:#6b7280;margin-right:4px;">Scenario</label>
+    <select id="scenario">
+      <option>cs_account_v3 (draft)</option>
+      <option>cs_billing_v1</option>
+      <option>new…</option>
+    </select>
+  </div>
+  <div class="ver">v3 · published · 2026-04-15 · by 김운영</div>
+  <div class="spacer"></div>
+  <button class="btn">Dry-run <span class="kbd">⌘↵</span></button>
+  <button class="btn">Diff</button>
+  <button class="btn warn">Rollback</button>
+  <button class="btn">Save Draft <span class="kbd">⌘S</span></button>
+  <button class="btn primary">Publish</button>
+</div>
+
+<div class="shell">
+
+  <!-- ── Palette ── -->
+  <aside class="palette">
+    <h4>Intent / Flow</h4>
+    <div class="node-card" draggable="true"><span class="dot" style="background:#7c3aed"></span><div class="label">Intent</div><span class="hint">분류</span></div>
+    <div class="node-card" draggable="true"><span class="dot" style="background:#d97706"></span><div class="label">Branch</div><span class="hint">분기</span></div>
+    <div class="node-card" draggable="true"><span class="dot" style="background:#9333ea"></span><div class="label">Wait</div><span class="hint">입력 대기</span></div>
+
+    <h4>Response</h4>
+    <div class="node-card" draggable="true"><span class="dot" style="background:#2563eb"></span><div class="label">LLM</div><span class="hint">응답</span></div>
+    <div class="node-card" draggable="true"><span class="dot" style="background:#059669"></span><div class="label">Tool</div><span class="hint">도구 호출</span></div>
+    <div class="node-card" draggable="true"><span class="dot" style="background:#0891b2"></span><div class="label">Context</div><span class="hint">슬롯</span></div>
+
+    <h4>Terminal</h4>
+    <div class="node-card" draggable="true"><span class="dot" style="background:#dc2626"></span><div class="label">Transfer</div><span class="hint">상담원</span></div>
+    <div class="node-card" draggable="true"><span class="dot" style="background:#6b7280"></span><div class="label">End</div><span class="hint">종료</span></div>
+
+    <h4 style="margin-top:22px;">Templates</h4>
+    <div class="node-card" draggable="true" style="background:#fafafa"><span class="dot" style="background:var(--accent)"></span><div class="label">기본 FAQ</div></div>
+    <div class="node-card" draggable="true" style="background:#fafafa"><span class="dot" style="background:var(--accent)"></span><div class="label">잔액 조회</div></div>
+    <div class="node-card" draggable="true" style="background:#fafafa"><span class="dot" style="background:var(--accent)"></span><div class="label">Outbound 확인콜</div></div>
+  </aside>
+
+  <!-- ── Canvas ── -->
+  <section class="canvas-wrap">
+    <div class="canvas">
+      <!-- edges -->
+      <svg class="edges" viewBox="0 0 1600 900">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f497d" />
+          </marker>
+        </defs>
+        <!-- greeting → wait -->
+        <path d="M 240,120 C 240,170 240,200 240,240" stroke="#1f497d" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        <!-- wait → classify -->
+        <path d="M 240,320 C 240,370 240,400 240,440" stroke="#1f497d" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        <!-- classify → router -->
+        <path d="M 240,520 C 240,560 360,560 420,600" stroke="#1f497d" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        <!-- router 분기: balance -->
+        <path d="M 520,640 C 620,640 680,560 780,500" stroke="#d97706" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        <text x="640" y="585" fill="#d97706" font-size="12" font-weight="600">balance_inquiry</text>
+        <!-- router → respond_billing -->
+        <path d="M 520,660 C 700,660 720,660 780,660" stroke="#d97706" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        <text x="620" y="650" fill="#d97706" font-size="12" font-weight="600">billing</text>
+        <!-- router → transfer -->
+        <path d="M 520,700 C 700,760 820,820 960,820" stroke="#d97706" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        <text x="660" y="790" fill="#d97706" font-size="12" font-weight="600">agent_transfer</text>
+        <!-- router → fallback (default) -->
+        <path d="M 460,680 C 400,760 280,780 160,780" stroke="#dc2626" stroke-width="2" stroke-dasharray="4,3" fill="none" marker-end="url(#arrow)"/>
+        <text x="240" y="770" fill="#dc2626" font-size="12" font-weight="600">default</text>
+        <!-- balance → respond_balance -->
+        <path d="M 860,460 C 860,500 860,520 860,540" stroke="#1f497d" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+        <!-- respond_balance → wait (loop back) -->
+        <path d="M 780,580 C 500,560 320,420 260,320" stroke="#1f497d" stroke-width="1.5" fill="none" stroke-dasharray="2,3" marker-end="url(#arrow)"/>
+        <!-- respond_billing → wait -->
+        <path d="M 860,700 C 520,740 320,500 260,320" stroke="#1f497d" stroke-width="1.5" fill="none" stroke-dasharray="2,3" marker-end="url(#arrow)"/>
+        <!-- fallback → transfer -->
+        <path d="M 160,820 C 360,860 700,860 960,840" stroke="#dc2626" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+      </svg>
+
+      <!-- nodes -->
+      <div class="n type-llm"    style="left:160px; top:80px;">
+        <div class="handle top"></div>
+        <div class="t">LLM</div><div class="l">greeting</div>
+        <div class="handle bottom"></div>
+      </div>
+
+      <div class="n type-wait"   style="left:160px; top:240px;">
+        <div class="handle top"></div>
+        <div class="t">WAIT</div><div class="l">wait_user</div>
+        <div class="handle bottom"></div>
+      </div>
+
+      <div class="n type-intent selected" style="left:160px; top:440px;">
+        <div class="handle top"></div>
+        <div class="t">INTENT</div><div class="l">classify</div>
+        <div style="margin-top:4px;">
+          <span class="chip">billing</span>
+          <span class="chip">balance_inquiry</span>
+          <span class="chip">agent_transfer</span>
+          <span class="chip">end_call</span>
+        </div>
+        <div class="handle bottom"></div>
+      </div>
+
+      <div class="n type-branch" style="left:400px; top:600px;">
+        <div class="handle top"></div>
+        <div class="t">BRANCH</div><div class="l">router (mode: intent)</div>
+        <div class="handle bottom"></div>
+      </div>
+
+      <div class="n type-tool"   style="left:780px; top:400px;">
+        <div class="handle top"></div>
+        <div class="t">TOOL</div><div class="l">lookup_balance</div>
+        <div style="font-size:11px; color:#6b7280; margin-top:4px;">account.get_balance · 3s · retry 1</div>
+        <div class="handle bottom"></div>
+      </div>
+
+      <div class="n type-llm"    style="left:780px; top:540px;">
+        <div class="handle top"></div>
+        <div class="t">LLM</div><div class="l">respond_balance</div>
+        <div class="handle bottom"></div>
+      </div>
+
+      <div class="n type-llm"    style="left:780px; top:640px;">
+        <div class="handle top"></div>
+        <div class="t">LLM</div><div class="l">respond_billing</div>
+        <div class="handle bottom"></div>
+      </div>
+
+      <div class="n type-transfer" style="left:960px; top:800px;">
+        <div class="handle top"></div>
+        <div class="t">TRANSFER</div><div class="l">agent_transfer</div>
+        <div style="font-size:11px; color:#6b7280; margin-top:4px;">queue: cs_general · summary: ✓</div>
+        <div class="handle bottom"></div>
+      </div>
+
+      <div class="n type-llm"    style="left:60px; top:760px;">
+        <div class="handle top"></div>
+        <div class="t">LLM</div><div class="l">fallback_speak</div>
+        <div style="font-size:11px; color:#b91c1c; margin-top:4px;">⚠ fallback path</div>
+        <div class="handle bottom"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Inspector ── -->
+  <aside class="inspector">
+    <div class="hd">Inspector — classify (Intent Node)</div>
+    <div class="body">
+      <div class="field">
+        <label>Node ID</label>
+        <input value="classify" />
+      </div>
+      <div class="field">
+        <label>Label</label>
+        <input value="인텐트 분류" />
+      </div>
+
+      <details open>
+        <summary>Config</summary>
+        <div class="field">
+          <label>Model</label>
+          <select>
+            <option selected>groq-llama-3.3-70b</option>
+            <option>groq-llama-4-scout</option>
+            <option>ko-intent-classifier (fine-tuned)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Labels (쉼표 구분)</label>
+          <textarea>billing, balance_inquiry, agent_transfer, end_call, unknown</textarea>
+        </div>
+        <div class="field">
+          <label>Threshold</label>
+          <input type="number" step="0.05" value="0.6" />
+        </div>
+        <div class="field">
+          <label>Prompt Template (optional)</label>
+          <textarea placeholder="You are a strict intent classifier...">(기본값 사용)</textarea>
+        </div>
+      </details>
+
+      <details>
+        <summary>Edges (outgoing via router)</summary>
+        <div class="field">
+          <label>when = "billing"</label>
+          <input value="respond_billing" readonly />
+        </div>
+        <div class="field">
+          <label>when = "balance_inquiry"</label>
+          <input value="lookup_balance" readonly />
+        </div>
+        <div class="field">
+          <label>when = "agent_transfer"</label>
+          <input value="agent_transfer" readonly />
+        </div>
+        <div class="field">
+          <label>when = "default"</label>
+          <input value="fallback_speak" readonly style="color:#b91c1c;" />
+        </div>
+      </details>
+
+      <details>
+        <summary>Limits & Observability</summary>
+        <div class="field"><label>max_turns</label><input type="number" value="20" /></div>
+        <div class="field"><label>max_cost_cents_per_session</label><input type="number" step="0.5" value="30" /></div>
+        <div class="field"><label>OTel sampling</label>
+          <select><option>100% (dev)</option><option selected>10% (prod)</option></select>
+        </div>
+      </details>
+
+      <div style="margin-top:10px; display:flex; gap:8px;">
+        <button class="btn" style="flex:1;">Cancel</button>
+        <button class="btn primary" style="flex:1;">Apply</button>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<div class="statusbar">
+  <span class="dot-status"></span> 검증 통과 · 노드 10 · 엣지 12 · 폴백 경로 1
+  <span style="color:#6b7280;">|</span>
+  <span class="warn">⚠ Tool "account.get_balance" 는 staging 환경에서만 등록됨 — prod publish 전 프로덕션 등록 필요</span>
+  <span style="flex:1;"></span>
+  <span style="color:#6b7280;">Shortcuts:</span>
+  <span class="kbd">⌘S</span> Save
+  <span class="kbd">⌘↵</span> Dry-run
+  <span class="kbd">Del</span> Delete
+  <span class="kbd">⌘Z</span> Undo
+</div>
+
+<script>
+  // 선택 하이라이트 데모
+  document.querySelectorAll('.n').forEach(n => {
+    n.addEventListener('click', (e) => {
+      document.querySelectorAll('.n.selected').forEach(x => x.classList.remove('selected'));
+      n.classList.add('selected');
+    });
+  });
+
+  // 드래그 인터랙션 (시각적 피드백만)
+  document.querySelectorAll('.node-card').forEach(c => {
+    c.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', c.querySelector('.label').textContent);
+    });
+  });
+  document.querySelector('.canvas').addEventListener('dragover', e => e.preventDefault());
+  document.querySelector('.canvas').addEventListener('drop', (e) => {
+    e.preventDefault();
+    const t = e.dataTransfer.getData('text/plain');
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const div = document.createElement('div');
+    div.className = 'n type-llm selected';
+    div.style.left = (x - 60) + 'px';
+    div.style.top = (y - 30) + 'px';
+    div.innerHTML = '<div class="handle top"></div><div class="t">NEW</div><div class="l">' + t + '_' + Math.floor(Math.random()*99) + '</div><div class="handle bottom"></div>';
+    e.currentTarget.appendChild(div);
+  });
+</script>
+
+</body>
+</html>

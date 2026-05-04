@@ -1,0 +1,20 @@
+{{- if .Values.pdb.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "agentoe-backend.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentoe-backend.labels" . | nindent 4 }}
+spec:
+  # minAvailable 50% — 노드 drain 동시에 절반 이상 죽으면 차단.
+  # WS 진행 중 통화가 한꺼번에 끊기지 않도록 함.
+  {{- if .Values.pdb.minAvailable }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  {{- else if .Values.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "agentoe-backend.selectorLabels" . | nindent 6 }}
+{{- end }}

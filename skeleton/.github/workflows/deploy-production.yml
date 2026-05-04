@@ -1,52 +1,243 @@
-name: Deploy to Production
+name: Deploy → Production
 
+# Trigger: vX.Y.Z 태그 push 또는 수동 재배포.
+# 흐름:
+#   1) plan      — helm-diff 결과를 PR comment / job summary 에 게시 (승인 자료)
+#   2) approval  — GitHub Environment "production" required reviewers 게이트 통과
+#   3) canary    — backend 만 weight 10% (별도 release name) → 5분 메트릭 관찰
+#   4) promote   — full rollout (모든 차트 정식 release)
+#   5) rollback  — 실패 시 helm rollback + Slack page
 on:
   push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "배포할 vX.Y.Z (필수)"
+        required: true
+      skip_canary:
+        description: "true 면 canary 단계 생략하고 바로 promote"
+        required: false
+        default: "false"
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+  deployments: write
+  issues: write           # incident link 자동 생성용 (선택)
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy Production
+  resolve:
+    name: Resolve image tag
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.t.outputs.image_tag }}
+    steps:
+      - id: t
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "image_tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── 1) plan — 승인 게이트 전에 diff 만 산출 ─────────────────────────
+  plan:
+    name: Plan (helm-diff)
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment:
+      name: production-plan          # required reviewers 없음 — 누구나 결과 열람
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [backend, vbgw, frontend]
+        include:
+          - service: backend
+            chart_path: skeleton/deploy/helm/agentoe-backend
+            release: agentoe-backend
+          - service: vbgw
+            chart_path: skeleton/deploy/helm/agentoe-vbgw
+            release: agentoe-vbgw
+          - service: frontend
+            chart_path: skeleton/deploy/helm/agentoe-frontend
+            release: agentoe-frontend
+    env:
+      ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-aws-oidc
+        with:
+          role-arn:   ${{ vars.AWS_EKS_DEPLOY_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: ./.github/actions/setup-helm
+      - uses: ./.github/actions/kubeconfig
+        with:
+          cluster-name: ${{ vars.EKS_CLUSTER_NAME_PROD }}
+          aws-region:   ${{ vars.AWS_REGION }}
+
+      - run: aws s3 cp "${{ vars.TF_OUTPUT_S3_URI_PROD }}" /tmp/agentoe-tf-prod.json
+
+      - uses: ./.github/actions/helm-deploy
+        with:
+          chart-path:  ${{ matrix.chart_path }}
+          release:     ${{ matrix.release }}
+          namespace:   agentoe
+          values-file: skeleton/deploy/helm/values/prod/${{ matrix.service }}.values.yaml
+          image-tag:   ${{ needs.resolve.outputs.image_tag }}
+          diff-only:   "true"
+
+  # ── 2) approval — production environment 의 required reviewers 가 게이트 ─
+  approve:
+    name: Manual approval
+    needs: [resolve, plan]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://api.agentoe.io/api/v1/livez
+    steps:
+      - run: echo "approved by ${{ github.actor }} for ${{ needs.resolve.outputs.image_tag }}"
+
+  # ── 3) canary — backend 만 별도 release 로 10% 트래픽 (Ingress weight) ─
+  canary:
+    name: Canary backend (10%)
+    needs: [resolve, approve]
+    if: ${{ inputs.skip_canary != 'true' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    env:
+      ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-aws-oidc
+        with: { role-arn: "${{ vars.AWS_EKS_DEPLOY_ROLE_ARN_PROD }}", aws-region: "${{ vars.AWS_REGION }}" }
+      - uses: ./.github/actions/setup-helm
+      - uses: ./.github/actions/kubeconfig
+        with: { cluster-name: "${{ vars.EKS_CLUSTER_NAME_PROD }}", aws-region: "${{ vars.AWS_REGION }}" }
+      - run: aws s3 cp "${{ vars.TF_OUTPUT_S3_URI_PROD }}" /tmp/agentoe-tf-prod.json
+
+      - name: Helm install canary release (separate name + 10% weight annotation)
+        working-directory: skeleton/deploy/helm
+        run: |
+          # canary 는 fullnameOverride 로 호스트 충돌 방지하고, ALB action.weight 어노테이션 활용.
+          helm upgrade --install agentoe-backend-canary ./agentoe-backend \
+            -n agentoe \
+            -f values/prod/backend.values.yaml \
+            --set image.tag="${{ needs.resolve.outputs.image_tag }}" \
+            --set fullnameOverride=agentoe-backend-canary \
+            --set replicaCount=2 \
+            --set autoscaling.enabled=false \
+            --set ingress.annotations."alb\.ingress\.kubernetes\.io/group\.name"=agentoe-prod-public \
+            --set ingress.annotations."alb\.ingress\.kubernetes\.io/group\.order"="50" \
+            --set ingress.annotations."alb\.ingress\.kubernetes\.io/actions\.weighted-routing"='{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"agentoe-backend","servicePort":80,"weight":90},{"serviceName":"agentoe-backend-canary","servicePort":80,"weight":10}]}}' \
+            --wait --timeout 8m --atomic
+
+      - name: Bake — 5 분간 메트릭 관찰
+        run: |
+          kubectl -n agentoe rollout status deploy/agentoe-backend-canary --timeout=300s
+          # error rate / latency 자동 게이트는 Prometheus 쿼리로 확장 가능 — 여기선 단순 sleep + 로그 샘플.
+          for i in $(seq 1 30); do
+            ERR=$(kubectl -n agentoe logs deploy/agentoe-backend-canary --since=10s 2>/dev/null | grep -c -E '"level":"(ERROR|CRITICAL)"' || echo 0)
+            echo "[canary t=${i}0s] err_lines=$ERR"
+            if [[ "$ERR" -gt 20 ]]; then
+              echo "::error title=Canary unhealthy::error log spike — rolling back"
+              helm uninstall agentoe-backend-canary -n agentoe || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+  # ── 4) promote — 모든 차트 full release ─────────────────────────────
+  promote:
+    name: Promote ${{ matrix.service }} → 100%
+    needs: [resolve, approve, canary]
+    # canary skip 옵션 사용 시 canary job 은 skipped 가 되지만 promote 는 진행되어야 함.
+    if: ${{ always() && (needs.canary.result == 'success' || needs.canary.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        service: [backend, vbgw, frontend]
+        include:
+          - service: backend
+            chart_path: skeleton/deploy/helm/agentoe-backend
+            release: agentoe-backend
+            smoke_url: /api/v1/livez
+            smoke_port: "8000"
+          - service: vbgw
+            chart_path: skeleton/deploy/helm/agentoe-vbgw
+            release: agentoe-vbgw
+            smoke_url: /healthz/live
+            smoke_port: "8080"
+          - service: frontend
+            chart_path: skeleton/deploy/helm/agentoe-frontend
+            release: agentoe-frontend
+            smoke_url: /healthz
+            smoke_port: "8080"
+    env:
+      ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-aws-oidc
+        with: { role-arn: "${{ vars.AWS_EKS_DEPLOY_ROLE_ARN_PROD }}", aws-region: "${{ vars.AWS_REGION }}" }
+      - uses: ./.github/actions/setup-helm
+      - uses: ./.github/actions/kubeconfig
+        with: { cluster-name: "${{ vars.EKS_CLUSTER_NAME_PROD }}", aws-region: "${{ vars.AWS_REGION }}" }
+      - run: aws s3 cp "${{ vars.TF_OUTPUT_S3_URI_PROD }}" /tmp/agentoe-tf-prod.json
+
+      - uses: ./.github/actions/helm-deploy
+        with:
+          chart-path:  ${{ matrix.chart_path }}
+          release:     ${{ matrix.release }}
+          namespace:   agentoe
+          values-file: skeleton/deploy/helm/values/prod/${{ matrix.service }}.values.yaml
+          image-tag:   ${{ needs.resolve.outputs.image_tag }}
+          smoke-url:   ${{ matrix.smoke_url }}
+          smoke-port:  ${{ matrix.smoke_port }}
+          rollback-on-failure: "true"
+
+  # ── 5) cleanup — canary release 정리 ────────────────────────────────
+  cleanup-canary:
+    name: Cleanup canary release
+    needs: [promote]
+    if: always()
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-aws-oidc
+        with: { role-arn: "${{ vars.AWS_EKS_DEPLOY_ROLE_ARN_PROD }}", aws-region: "${{ vars.AWS_REGION }}" }
+      - uses: ./.github/actions/setup-helm
+      - uses: ./.github/actions/kubeconfig
+        with: { cluster-name: "${{ vars.EKS_CLUSTER_NAME_PROD }}", aws-region: "${{ vars.AWS_REGION }}" }
+      - run: |
+          if helm -n agentoe status agentoe-backend-canary >/dev/null 2>&1; then
+            helm -n agentoe uninstall agentoe-backend-canary
+          fi
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Login to Container Registry
-        uses: docker/login-action@v3
+  release:
+    name: Create GitHub Release
+    needs: [resolve, promote]
+    if: ${{ github.event_name == 'push' && needs.promote.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Create release with autogenerated notes
+        uses: softprops/action-gh-release@v2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push image
-        uses: docker/build-push-action@v5
-        with:
-          context: backend
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/api:${{ steps.version.outputs.VERSION }}
-            ghcr.io/${{ github.repository }}/api:latest
-
-      - name: Deploy to K8s Production
-        uses: azure/k8s-deploy@v4
-        with:
-          namespace: agentoe
-          manifests: k8s/production/
-          images: ghcr.io/${{ github.repository }}/api:${{ steps.version.outputs.VERSION }}
-          strategy: rolling
-
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.version.outputs.VERSION }}
-          release_name: AgentOE ${{ steps.version.outputs.VERSION }}
-          draft: false
-          prerelease: false
+          tag_name: ${{ needs.resolve.outputs.image_tag }}
+          name: AgentOE ${{ needs.resolve.outputs.image_tag }}
+          generate_release_notes: true

@@ -99,31 +99,38 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             method=request.method,
         )
 
-        # 4. 요청 처리
+        # 4~5. 요청 처리 + 접근 로그를 모두 try 안에서 수행해
+        #       bound context (request_id / tenant_id) 가 access log 에 포함되도록
+        #       보장한다. clear 는 예외 경로에서도 반드시 호출되도록 finally 에 유지.
+        response: Response | None = None
         try:
-            response: Response = await call_next(request)
-        except Exception as exc:
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                elapsed_ms = (time.monotonic() - start_time) * 1000
+                logger.error(
+                    "Request failed with exception",
+                    status_code=500,
+                    elapsed_ms=round(elapsed_ms, 2),
+                    exc_info=exc,
+                )
+                raise
+
+            # 5. 접근 로그 (bound context 가 아직 살아있는 상태에서 기록)
             elapsed_ms = (time.monotonic() - start_time) * 1000
-            logger.error(
-                "Request failed with exception",
-                status_code=500,
-                elapsed_ms=round(elapsed_ms, 2),
-                exc_info=exc,
-            )
-            raise
+            if request.url.path not in _SKIP_ACCESS_LOG:
+                log_fn = logger.warning if response.status_code >= 400 else logger.info
+                log_fn(
+                    "HTTP request completed",
+                    status_code=response.status_code,
+                    elapsed_ms=round(elapsed_ms, 2),
+                )
         finally:
+            # 6. context var 정리 — 태스크 재사용/후속 요청에 오염되지 않도록
+            #    반드시 전부 비운다 (예외 경로 포함).
             clear_request_context()
 
-        # 5. 접근 로그
-        elapsed_ms = (time.monotonic() - start_time) * 1000
-        if request.url.path not in _SKIP_ACCESS_LOG:
-            log_fn = logger.warning if response.status_code >= 400 else logger.info
-            log_fn(
-                "HTTP request completed",
-                status_code=response.status_code,
-                elapsed_ms=round(elapsed_ms, 2),
-            )
-
-        # 6. 응답 헤더에 request_id 추가 (디버깅 편의)
+        # 7. 응답 헤더에 request_id 추가 (디버깅 편의)
+        assert response is not None  # 예외 시 이미 raise 됨
         response.headers["X-Request-ID"] = request_id
         return response

@@ -1,0 +1,54 @@
+# ingress-nginx (옵션). ALB → NLB → NGINX 패턴 또는 단독 NLB type LoadBalancer.
+# WebSocket 비율이 높은 콜봇 트래픽 — NLB + sticky 가 ALB 보다 비용/지연 면에서 유리.
+
+controller:
+  replicaCount: 3
+
+  # NLB 모드 — IP target. ELB 트래픽이 NGINX 를 거치므로 PROXY protocol 활성.
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: external
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+      service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+      service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: "*"
+
+  config:
+    use-proxy-protocol: "true"
+    use-forwarded-headers: "true"
+    enable-real-ip: "true"
+    proxy-body-size: "16m"
+    # WebSocket 안정성 — 60초 내 데이터 없으면 idle. 콜봇은 음성 패킷이 계속 흐르므로 OK.
+    proxy-read-timeout: "3600"
+    proxy-send-timeout: "3600"
+
+  # admission webhook 안정성.
+  admissionWebhooks:
+    enabled: true
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+  # 시스템 노드에 spread.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2

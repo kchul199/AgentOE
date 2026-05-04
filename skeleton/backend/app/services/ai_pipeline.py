@@ -23,7 +23,7 @@ from typing import AsyncIterator, Any
 
 import structlog
 
-from app.core.logging import bind_pipeline_context
+from app.core.logging import bind_pipeline_context, unbind_keys
 from app.core.metrics import record_pipeline_call
 from app.domain.circuit_breaker import CircuitBreakerOpenError, get_all_statuses
 from app.domain.policy_gate import PolicyGate, PolicyLevel
@@ -143,6 +143,7 @@ class AIPipeline:
                 total_ms=total_ms,
                 degraded=True,
             )
+            unbind_keys("pipeline_stage", "policy_level")
             return PipelineResult(
                 stt_text="",
                 llm_text=stt_text,
@@ -170,6 +171,7 @@ class AIPipeline:
                 tenant_id=tenant_id, success=True,
                 total_ms=total_ms, stt_ms=latency.get("stt_ms", 0),
             )
+            unbind_keys("pipeline_stage", "policy_level")
             return PipelineResult(
                 stt_text=stt_text,
                 llm_text=f"[POLICY_BLOCKED:{policy_eval.level.value}]",
@@ -265,6 +267,12 @@ class AIPipeline:
             degraded=degraded,
             degraded_stage=degraded_stage,
         )
+
+        # ── 6. context 누수 방지 (Track 2-e) ────────────────────────────────
+        #   각 단계에서 bind 한 pipeline_stage / policy_level 는 turn 경계를
+        #   넘지 않도록 여기서 정리한다. 호출자(orchestrator) 가 별도로
+        #   session_id / tenant_id 를 관리하므로 그 키들은 건드리지 않는다.
+        unbind_keys("pipeline_stage", "policy_level")
 
         return PipelineResult(
             stt_text=stt_text,

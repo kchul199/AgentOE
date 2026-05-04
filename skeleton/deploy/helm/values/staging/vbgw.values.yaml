@@ -1,0 +1,62 @@
+# agentoe-vbgw  ·  staging
+image:
+  repository: REPLACE_ECR_REGISTRY/agentoe-staging/vbgw
+  tag: ""
+
+replicaCount: 2
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 60
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2
+    memory: 2Gi
+
+terminationGracePeriodSeconds: 300
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# 외부 NLB 노출 — staging 에선 실제 SIP/RTP 검증 위해 켬.
+externalService:
+  enabled: true
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-attributes: |
+      idle_timeout.timeout_seconds=350,
+      load_balancing.cross_zone.enabled=true
+
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "REPLACE_VBGW_IRSA_ROLE_ARN"
+
+config:
+  ENVIRONMENT: "staging"
+  LOG_LEVEL: "DEBUG"
+  GRPC_PORT: "50051"
+  WS_PORT: "50052"
+  METRICS_PORT: "9100"
+  HEALTH_PORT: "8080"
+  AUDIO_SAMPLE_RATE: "16000"
+  AUDIO_CHUNK_MS: "20"
+  STT_PROVIDER: "google"
+  TTS_PROVIDER: "google"
+  BACKEND_HTTP_URL: "http://agentoe-backend.agentoe-staging.svc.cluster.local"
+  BACKEND_WS_URL: "ws://agentoe-backend.agentoe-staging.svc.cluster.local/api/v1/ws"
+  MAX_CONCURRENT_CALLS: "20"
+
+externalSecrets:
+  enabled: true
+  secretsPrefix: "agentoe/staging"

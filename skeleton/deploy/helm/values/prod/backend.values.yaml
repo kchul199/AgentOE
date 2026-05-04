@@ -1,0 +1,136 @@
+# ──────────────────────────────────────────────────────────────────────────
+# agentoe-backend  ·  production override
+# 적용:
+#   helm upgrade --install agentoe-backend ./agentoe-backend \
+#     -n agentoe --create-namespace \
+#     -f values/prod/backend.values.yaml
+# ──────────────────────────────────────────────────────────────────────────
+
+image:
+  repository: REPLACE_ECR_REGISTRY/agentoe-prod/backend
+  tag: ""
+
+# ── 프로덕션 규모 ───────────────────────────────────────────────────────
+replicaCount: 6
+autoscaling:
+  enabled: true
+  minReplicas: 6
+  maxReplicas: 60
+  targetCPUUtilizationPercentage: 60
+  customMetrics:
+    enabled: true
+    activeSessionsPerPod: 80
+
+resources:
+  requests:
+    cpu: 1
+    memory: 1.5Gi
+  limits:
+    cpu: 4
+    memory: 3Gi
+
+pdb:
+  enabled: true
+  minAvailable: "60%"
+
+terminationGracePeriodSeconds: 120
+
+# 프로덕션은 priorityClass 로 evict 우선순위 보호.
+priorityClassName: "agentoe-critical"
+
+# ── 도메인 / ALB ───────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/healthcheck-path: /api/v1/livez
+    alb.ingress.kubernetes.io/load-balancer-attributes: |
+      idle_timeout.timeout_seconds=3600,
+      routing.http2.enabled=true,
+      routing.http.drop_invalid_header_fields.enabled=true,
+      access_logs.s3.enabled=true,
+      access_logs.s3.bucket=REPLACE_ALB_ACCESSLOG_BUCKET,
+      access_logs.s3.prefix=alb/agentoe-prod
+    alb.ingress.kubernetes.io/wafv2-acl-arn: "REPLACE_WAF_ACL_ARN"
+    alb.ingress.kubernetes.io/group.name: agentoe-prod-public
+    alb.ingress.kubernetes.io/group.order: "100"
+    alb.ingress.kubernetes.io/certificate-arn: "REPLACE_ACM_ARN_PROD"
+  hosts:
+    - host: api.agentoe.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+# ── IRSA ────────────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "REPLACE_BACKEND_IRSA_ROLE_ARN_PROD"
+
+# ── Endpoints ──────────────────────────────────────────────────────────
+endpoints:
+  MONGODB_HOST: "REPLACE_ATLAS_SRV_HOST_PROD"
+  MONGODB_DB_NAME: "agentoe"
+  REDIS_HOST: "REPLACE_REDIS_PRIMARY_HOST_PROD"
+  REDIS_PORT: "6379"
+  JWKS_URL: "https://auth.agentoe.io/.well-known/jwks.json"
+  JWT_ISSUER: "https://auth.agentoe.io/"
+  JWT_AUDIENCE: "agentoe-api"
+
+# ── Config ─────────────────────────────────────────────────────────────
+config:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  CORS_ORIGINS: '["https://app.agentoe.io"]'
+  WS_ALLOWED_ORIGINS: '["https://app.agentoe.io"]'
+  REDIS_POOL_SIZE: "100"
+  MONGODB_POOL_SIZE: "200"
+  HTTP_CONNECT_TIMEOUT: "2.0"
+  HTTP_READ_TIMEOUT: "8.0"
+  STT_TIMEOUT_SECONDS: "4.0"
+  LLM_TIMEOUT_SECONDS: "6.0"
+  TTS_TIMEOUT_SECONDS: "3.0"
+  SHUTDOWN_DRAIN_TIMEOUT_SECONDS: "90"
+  SHUTDOWN_ACTIVE_CALL_ANNOUNCE: "true"
+  PII_MASKING_ENABLED: "true"
+  PII_RAW_PERSIST_ENABLED: "false"
+  AUDIO_PERSIST_ENABLED: "false"
+  SESSION_RETENTION_DAYS: "30"
+  AUDIT_RETENTION_DAYS: "365"
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_PER_IP_PER_MIN: "120"
+  RATE_LIMIT_PER_TENANT_PER_MIN: "6000"
+  IDEMPOTENCY_ENABLED: "true"
+  IDEMPOTENCY_TTL_SECONDS: "600"
+  AGENTIC_DISABLED: "false"
+  AGENTIC_TENANTS: ""
+  AGENTIC_CANARY_PERCENT: "10"      # 프로덕션은 10% 카나리부터
+
+externalSecrets:
+  enabled: true
+  secretsPrefix: "agentoe/prod"
+
+networkPolicy:
+  enabled: true
+  ingress:
+    fromIngressNamespace: "ingress-nginx"
+    fromMonitoringNamespace: "monitoring"
+
+# ── gRPC server (vbgw bridge → backend VoicebotAiService) ───────────────
+container:
+  port: 8000
+  workers: 4               # prod 는 더 많은 worker
+  grpcEnabled: true
+  grpcPort: 50051
+
+# prod 는 NetworkPolicy 활성. vbgw 는 namespace `vbgw` 사용 가정.
+networkPolicy:
+  enabled: true
+  ingress:
+    fromIngressNamespace: "ingress-nginx"
+    fromMonitoringNamespace: "monitoring"
+    fromVbgwNamespace: "vbgw"

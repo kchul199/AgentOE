@@ -1,0 +1,60 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Cross-project integration override — AgentOE backend ↔ vbgw bridge
+#
+# 목적: 운영 배포 전, 로컬에서 양 프로젝트가 gRPC 로 실제 연결되는지 검증.
+#
+# 사용:
+#   # 0) 외부 docker network 1 회 생성 (둘 다 join 할 공유 망)
+#   docker network create agentoe-vbgw-bridge || true
+#
+#   # 1) AgentOE backend stack 기동 (gRPC 포트 노출 + 공유 network join)
+#   cd ~/AgenticOE_v2/skeleton
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.dev.yml \
+#                  -f docker-compose.integration.yml up -d
+#
+#   # 2) vbgw stack 기동 (bridge 가 backend 의 gRPC 로 redirect)
+#   cd ~/vbgw_v2/vbgw-freeswitch
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.integration.yml up -d
+#
+#   # 3) smoke 테스트 (bridge 없이 backend 만 빠르게)
+#   cd ~/AgenticOE_v2/skeleton/scripts
+#   python3 smoke-grpc-client.py
+#
+# 결과:
+#   - backend container 가 gRPC :50051 도 호스트에 publish (grpcurl 직접 가능)
+#   - 두 stack 의 컨테이너가 공유 network 로 서로 도달 (bridge → agentoe-api)
+# ──────────────────────────────────────────────────────────────────────────
+version: "3.9"
+
+services:
+  api:
+    # gRPC 포트도 호스트에 publish — 외부 grpcurl / smoke client 용
+    ports:
+      - "50051:50051"
+    environment:
+      # Phase Y 기본값과 동일이지만 명시 (트러블슈팅 시 빠른 확인)
+      GRPC_ENABLED: "true"
+      GRPC_PORT: "50051"
+      GRPC_REFLECTION_ENABLED: "true"   # dev 에서만 — grpcurl describe/list 가능
+    networks:
+      - agentoe-net
+      - integration-bridge   # vbgw stack 과 공유
+    # gRPC health 도 healthcheck 에 포함 (선택 — 의존 X)
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - 'curl -sf http://localhost:8000/api/v1/livez && nc -z localhost 50051'
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  # external 모드 — `docker network create agentoe-vbgw-bridge` 가 사전에 만들어 둠.
+  integration-bridge:
+    external: true
+    name: agentoe-vbgw-bridge

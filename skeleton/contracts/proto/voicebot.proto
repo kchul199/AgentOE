@@ -1,0 +1,63 @@
+// ──────────────────────────────────────────────────────────────────────────
+// voicebot.proto — Bridge ↔ AI 엔진 양방향 스트리밍 contract
+//
+// CANONICAL OWNER: AgenticOE_v2 (이 파일이 단일 진실 소스)
+// CONSUMERS:
+//   1) AgenticOE_v2/skeleton/backend       — Python stub (gen/python/)
+//   2) vbgw_v2/vbgw-ai/proto/voicebot      — Go stub
+//   3) vbgw_v2/vbgw-freeswitch/bridge/proto/voicebot — Go stub
+//   4) vbgw_v2/vbgw-freeswitch/protos      — proto only (참조용)
+//
+// 변경 절차:
+//   1) 이 파일 수정 → AgenticOE_v2 PR
+//   2) `make gen-python && make gen-go` — stub 재생성
+//   3) `scripts/sync-to-vbgw.sh` — vbgw_v2 의 3 곳에 동기화
+//   4) 양쪽 PR 머지 + CI 통과
+//
+// 호환성 정책:
+//   - field 추가는 항상 OK (proto3 default 가 보장)
+//   - field 삭제 / 타입 변경 / 번호 재사용 금지
+//   - 새 RPC 는 새 service 또는 새 method 로 (기존 method signature 변경 금지)
+// ──────────────────────────────────────────────────────────────────────────
+syntax = "proto3";
+
+package voicebot.ai;
+
+// gen/go/voicebot 로 출력. consumer 별 go_package 는 sync 스크립트가 치환.
+option go_package = "agentoe/contracts/gen/go/voicebot";
+
+// C++ Arena Allocation (legacy C++ vbgw 용 — 현재는 미사용이지만 호환 유지)
+option cc_enable_arenas = true;
+
+// ──────────────────────────────────────────────────────────────────────────
+// VoicebotAiService — 통화 한 건당 양방향 stream 1개.
+// Bridge (Go) 가 client, AI 엔진이 server.
+// ──────────────────────────────────────────────────────────────────────────
+service VoicebotAiService {
+    // 한 통화의 전체 audio stream + AI 응답 stream.
+    // Bridge → AI: AudioChunk 시퀀스 (20ms 단위)
+    // AI → Bridge: AiResponse 시퀀스 (STT 텍스트, TTS 오디오, end-of-turn)
+    rpc StreamSession(stream AudioChunk) returns (stream AiResponse);
+}
+
+// 1. Bridge → AI Engine: 고객 발화 (또는 DTMF) 한 청크
+message AudioChunk {
+    string session_id = 1;     // SIP Call-ID (전 시스템 통합 trace id)
+    bytes audio_data = 2;      // 16kHz PCM (20ms = 640 byte)
+    bool is_speaking = 3;      // VAD 결과 — true 면 발화 중
+    string dtmf_digit = 4;     // [IVR] DTMF 한 글자 ('0'-'9', '*', '#'). 비어 있으면 음성.
+}
+
+// 2. AI Engine → Bridge: STT/TTS/제어 응답
+message AiResponse {
+    enum ResponseType {
+        STT_RESULT  = 0;       // 실시간 STT 중간/최종 텍스트
+        TTS_AUDIO   = 1;       // 봇의 응답 오디오 (16kHz PCM stream)
+        END_OF_TURN = 2;       // 봇 발화 종료 — bridge 가 turn 종료 처리
+    }
+
+    ResponseType type = 1;
+    string text_content = 2;   // STT 텍스트 또는 TTS 원시 텍스트 (관측용)
+    bytes audio_data = 3;      // TTS 오디오 (Bridge 가 PBX 로 송출)
+    bool clear_buffer = 4;     // Barge-in 시 현재 재생 중 audio 즉시 플러시
+}

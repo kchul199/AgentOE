@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentoe-backend.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentoe-backend.labels" . | nindent 4 }}
+data:
+  # 비-민감 설정 평문. envFrom 으로 한꺼번에 주입.
+  {{- range $k, $v := .Values.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+  # 정적 endpoint (host/port). 시크릿이 아니므로 ConfigMap 에 OK.
+  {{- range $k, $v := .Values.endpoints }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

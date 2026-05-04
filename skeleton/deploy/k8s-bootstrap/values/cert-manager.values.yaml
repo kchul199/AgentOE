@@ -1,0 +1,48 @@
+# cert-manager production values
+# CRDs 는 Helm 으로 자동 설치 (편하지만 차트 삭제 시 CRD 도 사라지는 점 유의).
+
+installCRDs: true
+
+global:
+  leaderElection:
+    namespace: cert-manager
+
+# 컨트롤러는 leader 1, replica 2 로 HA.
+replicaCount: 2
+
+# Prometheus 수집.
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+
+# 시스템 노드에만.
+nodeSelector:
+  node-pool: system
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+
+webhook:
+  replicaCount: 2
+  nodeSelector:
+    node-pool: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+
+cainjector:
+  replicaCount: 2
+  nodeSelector:
+    node-pool: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 100Mi
+  limits:
+    cpu: 200m
+    memory: 250Mi

@@ -1,0 +1,19 @@
+# 공유 PriorityClass — agentoe 워크로드 evict 우선순위.
+# 한 번만 cluster-wide 로 apply 한다.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: agentoe-critical
+value: 1000000
+preemptionPolicy: PreemptLowerPriority
+globalDefault: false
+description: "agentoe-backend / agentoe-vbgw 같은 통화 SLA 직결 워크로드용."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: agentoe-standard
+value: 100000
+preemptionPolicy: PreemptLowerPriority
+globalDefault: false
+description: "frontend / 비-실시간 워커. 통화 워크로드보다는 낮음."

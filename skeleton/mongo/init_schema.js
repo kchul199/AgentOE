@@ -113,8 +113,46 @@ db.sessions.createIndex({ "tenant_id": 1, "agent_id": 1, "created_at": -1 });
 db.sessions.createIndex({ "user_id": 1 });
 db.sessions.createIndex({ "status": 1 });
 
-// 4. System Collections (향후 확장)
-// audit_logs, webhooks, api_keys 등은 필요시 추가
+// 4. audit_events (감사 로그) — Time Series + WORM
+//
+// WORM(Write-Once-Read-Many) 보장은 다음 3단계로 달성:
+//   (1) MongoDB 7+ Time Series 콜렉션 — bucket 내부 구조로 insert 만 효율적.
+//   (2) auditWriter role (create_audit_role.js) — insert 권한만 부여.
+//   (3) expireAfterSeconds 로 법정 보관 기한(기본 90일 × 12개월 = 약 3년) 이후 자동 삭제.
+//
+// 스키마 검증은 TS 콜렉션에 걸 수 없으므로 클라이언트측에서 형식 보장
+// (app/repositories/audit_repository.py 의 AuditRepository.log 참조).
+if (!db.getCollectionNames().includes("audit_events")) {
+  db.createCollection("audit_events", {
+    timeseries: {
+      timeField: "timestamp",
+      metaField: "metadata",
+      granularity: "seconds"
+    },
+    // 3년 — 법정 보관 기한(통신사 통화 기록 1~3년)에 맞춤. 테넌트별 계약 차이는
+    // application-layer 에서 archival 파이프라인으로 별도 보관.
+    expireAfterSeconds: 94608000
+  });
+
+  // Time Series 콜렉션은 secondary 인덱스로 metadata.tenant_id + timestamp DESC 를 권장.
+  // query path: {metadata.tenant_id: X, timestamp: {$gte: ..}} → 이 인덱스로 즉시 해결.
+  db.audit_events.createIndex(
+    { "metadata.tenant_id": 1, "timestamp": -1 },
+    { name: "tenant_ts_desc" }
+  );
+  db.audit_events.createIndex(
+    { "metadata.session_id": 1, "timestamp": -1 },
+    { name: "session_ts_desc", sparse: true }
+  );
+  db.audit_events.createIndex(
+    { "metadata.event_type": 1, "timestamp": -1 },
+    { name: "event_type_ts_desc" }
+  );
+  print("✓ audit_events time-series collection created (WORM-enforced)");
+} else {
+  print("ℹ audit_events already exists — skipping");
+}
 
 print("✓ Schema initialization complete");
-print("Collections created: agents, calls, sessions");
+print("Collections created: agents, calls, sessions, audit_events");
+print("ℹ auditWriter role is provisioned by mongo/create_audit_role.js (run after this).");

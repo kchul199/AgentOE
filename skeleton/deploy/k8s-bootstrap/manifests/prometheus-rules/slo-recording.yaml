@@ -1,0 +1,283 @@
+# ──────────────────────────────────────────────────────────────────────────
+# SLO recording rules
+#
+# 목적:
+#   - SLI 비율을 다양한 윈도우 (5m/30m/1h/6h/24h/3d/30d) 로 미리 계산
+#   - alerting / dashboard 쿼리 cost ↓ (스크랩 시점 1회 계산 → 재사용)
+#
+# 명명 규칙 (Prometheus convention):
+#   slo:<service>_<sli>:<aggregation><window>
+#
+# 모든 rule 은 docs/reference/slo.md 의 SLI 정의를 코드로 옮긴 것.
+# ──────────────────────────────────────────────────────────────────────────
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agentoe-slo-recording
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: agentoe
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    # ── 1. backend-api · success ratio (5xx 제외) ─────────────────────────
+    - name: agentoe.slo.api.success
+      interval: 30s
+      rules:
+        # numerator / denominator 는 별도 시리즈로도 노출 (디버깅용)
+        - record: slo:http_requests:rate5m
+          expr: sum(rate(http_requests_total{job="agentoe-backend"}[5m]))
+        - record: slo:http_requests_5xx:rate5m
+          expr: sum(rate(http_requests_total{job="agentoe-backend",status=~"5.."}[5m]))
+
+        # ratio (good/total). 분모 0 보호 — clamp_min 으로 NaN 방지.
+        - record: slo:http_request_success_ratio:rate5m
+          expr: |
+            1 - (
+              slo:http_requests_5xx:rate5m
+              /
+              clamp_min(slo:http_requests:rate5m, 0.001)
+            )
+        - record: slo:http_request_success_ratio:rate30m
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{job="agentoe-backend",status=~"5.."}[30m]))
+              /
+              clamp_min(sum(rate(http_requests_total{job="agentoe-backend"}[30m])), 0.001)
+            )
+        - record: slo:http_request_success_ratio:rate1h
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{job="agentoe-backend",status=~"5.."}[1h]))
+              /
+              clamp_min(sum(rate(http_requests_total{job="agentoe-backend"}[1h])), 0.001)
+            )
+        - record: slo:http_request_success_ratio:rate6h
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{job="agentoe-backend",status=~"5.."}[6h]))
+              /
+              clamp_min(sum(rate(http_requests_total{job="agentoe-backend"}[6h])), 0.001)
+            )
+        - record: slo:http_request_success_ratio:rate1d
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{job="agentoe-backend",status=~"5.."}[1d]))
+              /
+              clamp_min(sum(rate(http_requests_total{job="agentoe-backend"}[1d])), 0.001)
+            )
+        - record: slo:http_request_success_ratio:rate3d
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{job="agentoe-backend",status=~"5.."}[3d]))
+              /
+              clamp_min(sum(rate(http_requests_total{job="agentoe-backend"}[3d])), 0.001)
+            )
+        - record: slo:http_request_success_ratio:rate30d
+          expr: |
+            1 - (
+              sum(rate(http_requests_total{job="agentoe-backend",status=~"5.."}[30d]))
+              /
+              clamp_min(sum(rate(http_requests_total{job="agentoe-backend"}[30d])), 0.001)
+            )
+
+    # ── 2. backend-api · latency under 500ms ─────────────────────────────
+    - name: agentoe.slo.api.latency
+      interval: 30s
+      rules:
+        - record: slo:http_latency_under_500ms:ratio5m
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{job="agentoe-backend",le="0.5"}[5m]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{job="agentoe-backend"}[5m])), 0.001)
+        - record: slo:http_latency_under_500ms:ratio30m
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{job="agentoe-backend",le="0.5"}[30m]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{job="agentoe-backend"}[30m])), 0.001)
+        - record: slo:http_latency_under_500ms:ratio1h
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{job="agentoe-backend",le="0.5"}[1h]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{job="agentoe-backend"}[1h])), 0.001)
+        - record: slo:http_latency_under_500ms:ratio6h
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{job="agentoe-backend",le="0.5"}[6h]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{job="agentoe-backend"}[6h])), 0.001)
+        - record: slo:http_latency_under_500ms:ratio1d
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{job="agentoe-backend",le="0.5"}[1d]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{job="agentoe-backend"}[1d])), 0.001)
+        - record: slo:http_latency_under_500ms:ratio30d
+          expr: |
+            sum(rate(http_request_duration_seconds_bucket{job="agentoe-backend",le="0.5"}[30d]))
+            /
+            clamp_min(sum(rate(http_request_duration_seconds_count{job="agentoe-backend"}[30d])), 0.001)
+
+    # ── 3. agentic · pipeline success ratio ──────────────────────────────
+    - name: agentoe.slo.agentic.success
+      interval: 30s
+      rules:
+        - record: slo:agentic_success_ratio:rate5m
+          expr: |
+            sum(rate(agentoe_pipeline_calls_total{status=~"success|degraded"}[5m]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_calls_total[5m])), 0.001)
+        - record: slo:agentic_success_ratio:rate30m
+          expr: |
+            sum(rate(agentoe_pipeline_calls_total{status=~"success|degraded"}[30m]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_calls_total[30m])), 0.001)
+        - record: slo:agentic_success_ratio:rate1h
+          expr: |
+            sum(rate(agentoe_pipeline_calls_total{status=~"success|degraded"}[1h]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_calls_total[1h])), 0.001)
+        - record: slo:agentic_success_ratio:rate6h
+          expr: |
+            sum(rate(agentoe_pipeline_calls_total{status=~"success|degraded"}[6h]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_calls_total[6h])), 0.001)
+        - record: slo:agentic_success_ratio:rate30d
+          expr: |
+            sum(rate(agentoe_pipeline_calls_total{status=~"success|degraded"}[30d]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_calls_total[30d])), 0.001)
+
+    # ── 4. agentic · latency under 2.5s (ms 단위 시리즈) ────────────────
+    - name: agentoe.slo.agentic.latency
+      interval: 30s
+      rules:
+        # 버킷 경계 le="3000" (가장 가까운 상한 — 약간 보수적). SLI 정의 참고.
+        - record: slo:agentic_latency_under_2_5s:ratio5m
+          expr: |
+            sum(rate(agentoe_pipeline_latency_ms_bucket{le="3000"}[5m]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_latency_ms_count[5m])), 0.001)
+        - record: slo:agentic_latency_under_2_5s:ratio30m
+          expr: |
+            sum(rate(agentoe_pipeline_latency_ms_bucket{le="3000"}[30m]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_latency_ms_count[30m])), 0.001)
+        - record: slo:agentic_latency_under_2_5s:ratio1h
+          expr: |
+            sum(rate(agentoe_pipeline_latency_ms_bucket{le="3000"}[1h]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_latency_ms_count[1h])), 0.001)
+        - record: slo:agentic_latency_under_2_5s:ratio6h
+          expr: |
+            sum(rate(agentoe_pipeline_latency_ms_bucket{le="3000"}[6h]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_latency_ms_count[6h])), 0.001)
+        - record: slo:agentic_latency_under_2_5s:ratio30d
+          expr: |
+            sum(rate(agentoe_pipeline_latency_ms_bucket{le="3000"}[30d]))
+            /
+            clamp_min(sum(rate(agentoe_pipeline_latency_ms_count[30d])), 0.001)
+
+    # ── 5. vbgw · call setup ratio ────────────────────────────────────────
+    - name: agentoe.slo.vbgw.setup
+      interval: 30s
+      rules:
+        - record: slo:vbgw_call_setup_ratio:rate5m
+          expr: |
+            sum(rate(agentoe_call_setup_total{result="ok"}[5m]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total[5m])), 0.001)
+        - record: slo:vbgw_call_setup_ratio:rate30m
+          expr: |
+            sum(rate(agentoe_call_setup_total{result="ok"}[30m]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total[30m])), 0.001)
+        - record: slo:vbgw_call_setup_ratio:rate1h
+          expr: |
+            sum(rate(agentoe_call_setup_total{result="ok"}[1h]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total[1h])), 0.001)
+        - record: slo:vbgw_call_setup_ratio:rate6h
+          expr: |
+            sum(rate(agentoe_call_setup_total{result="ok"}[6h]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total[6h])), 0.001)
+        - record: slo:vbgw_call_setup_ratio:rate30d
+          expr: |
+            sum(rate(agentoe_call_setup_total{result="ok"}[30d]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total[30d])), 0.001)
+
+    # ── 6. vbgw · mid-call drop ratio ─────────────────────────────────────
+    - name: agentoe.slo.vbgw.drop
+      interval: 30s
+      rules:
+        - record: slo:vbgw_mid_call_drop_ratio:rate5m
+          expr: |
+            sum(rate(agentoe_call_terminations_total{reason=~"network|server_error|crash"}[5m]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total{result="ok"}[5m])), 0.001)
+        - record: slo:vbgw_mid_call_drop_ratio:rate1h
+          expr: |
+            sum(rate(agentoe_call_terminations_total{reason=~"network|server_error|crash"}[1h]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total{result="ok"}[1h])), 0.001)
+        - record: slo:vbgw_mid_call_drop_ratio:rate6h
+          expr: |
+            sum(rate(agentoe_call_terminations_total{reason=~"network|server_error|crash"}[6h]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total{result="ok"}[6h])), 0.001)
+        - record: slo:vbgw_mid_call_drop_ratio:rate30d
+          expr: |
+            sum(rate(agentoe_call_terminations_total{reason=~"network|server_error|crash"}[30d]))
+            /
+            clamp_min(sum(rate(agentoe_call_setup_total{result="ok"}[30d])), 0.001)
+
+    # ── 7. auth · jwks refresh success ratio ─────────────────────────────
+    - name: agentoe.slo.auth.jwks
+      interval: 30s
+      rules:
+        - record: slo:auth_jwks_refresh_ratio:rate5m
+          expr: |
+            sum(rate(agentoe_jwks_refresh_duration_seconds_count{result="success"}[5m]))
+            /
+            clamp_min(sum(rate(agentoe_jwks_refresh_duration_seconds_count[5m])), 0.001)
+        - record: slo:auth_jwks_refresh_ratio:rate1h
+          expr: |
+            sum(rate(agentoe_jwks_refresh_duration_seconds_count{result="success"}[1h]))
+            /
+            clamp_min(sum(rate(agentoe_jwks_refresh_duration_seconds_count[1h])), 0.001)
+        - record: slo:auth_jwks_refresh_ratio:rate6h
+          expr: |
+            sum(rate(agentoe_jwks_refresh_duration_seconds_count{result="success"}[6h]))
+            /
+            clamp_min(sum(rate(agentoe_jwks_refresh_duration_seconds_count[6h])), 0.001)
+        - record: slo:auth_jwks_refresh_ratio:rate30d
+          expr: |
+            sum(rate(agentoe_jwks_refresh_duration_seconds_count{result="success"}[30d]))
+            /
+            clamp_min(sum(rate(agentoe_jwks_refresh_duration_seconds_count[30d])), 0.001)
+
+    # ── 8. error budget remaining (30일 윈도우) ─────────────────────────
+    # 0.0~1.0 — 0 이면 다 소진. 대시보드 KPI 카드용.
+    - name: agentoe.slo.error_budget
+      interval: 1m
+      rules:
+        - record: slo:budget_remaining:api_success
+          expr: |
+            (slo:http_request_success_ratio:rate30d - 0.999) / (1 - 0.999)
+        - record: slo:budget_remaining:api_latency
+          expr: |
+            (slo:http_latency_under_500ms:ratio30d - 0.99) / (1 - 0.99)
+        - record: slo:budget_remaining:agentic_success
+          expr: |
+            (slo:agentic_success_ratio:rate30d - 0.995) / (1 - 0.995)
+        - record: slo:budget_remaining:agentic_latency
+          expr: |
+            (slo:agentic_latency_under_2_5s:ratio30d - 0.95) / (1 - 0.95)
+        - record: slo:budget_remaining:vbgw_setup
+          expr: |
+            (slo:vbgw_call_setup_ratio:rate30d - 0.999) / (1 - 0.999)
+        - record: slo:budget_remaining:vbgw_drop
+          expr: |
+            ((1 - slo:vbgw_mid_call_drop_ratio:rate30d) - 0.999) / (1 - 0.999)

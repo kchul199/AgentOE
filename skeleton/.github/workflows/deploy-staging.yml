@@ -1,51 +1,150 @@
-name: Deploy to Staging
+name: Deploy → Staging
 
+# build-images.yml 이 main 푸시에서 끝나면 자동 배포.
+# helm upgrade --install --atomic + smoke + Slack 알림.
 on:
-  push:
-    branches: [develop]
+  workflow_run:
+    workflows: ["Build & Publish Images"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "특정 이미지 태그로 배포 (비우면 latest main sha 사용)"
+        required: false
+      services:
+        description: "배포할 차트 (콤마, 비우면 모두). backend,vbgw,frontend"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read           # workflow_run 의 artifact / output 읽기
+  pull-requests: write    # 사용 시 diff comment 옵션
+
+concurrency:
+  group: deploy-staging   # 같은 환경에 동시 배포 금지
+  cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy Staging
+  resolve:
+    name: Resolve target image
     runs-on: ubuntu-latest
-    environment: staging
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      services:  ${{ steps.svc.outputs.services }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - id: tag
+        run: |
+          if [[ -n "${{ inputs.image_tag }}" ]]; then
+            echo "image_tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            # build-images 가 사용한 태그와 동일한 head sha 12자.
+            SHA="${{ github.event.workflow_run.head_sha }}"
+            echo "image_tag=${SHA:0:12}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Login to Container Registry
-        uses: docker/login-action@v3
+      - id: svc
+        run: |
+          if [[ -n "${{ inputs.services }}" ]]; then
+            arr=$(echo "${{ inputs.services }}" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";""))')
+          else
+            arr='["backend","vbgw","frontend"]'
+          fi
+          echo "services=$arr" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy ${{ matrix.service }} → staging
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://api-staging.agentoe.io/api/v1/livez
+    strategy:
+      fail-fast: false
+      max-parallel: 1                      # 같은 클러스터에 순차 배포
+      matrix:
+        service: ${{ fromJSON(needs.resolve.outputs.services) }}
+        include:
+          - service: backend
+            chart_path: skeleton/deploy/helm/agentoe-backend
+            release: agentoe-backend
+            smoke_url: /api/v1/livez
+            smoke_port: "8000"
+          - service: vbgw
+            chart_path: skeleton/deploy/helm/agentoe-vbgw
+            release: agentoe-vbgw
+            smoke_url: /healthz/live
+            smoke_port: "8080"
+          - service: frontend
+            chart_path: skeleton/deploy/helm/agentoe-frontend
+            release: agentoe-frontend
+            smoke_url: /healthz
+            smoke_port: "8080"
+    env:
+      ENV: staging
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-aws-oidc
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          role-arn:   ${{ vars.AWS_EKS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v5
+      - uses: ./.github/actions/setup-helm
+
+      - uses: ./.github/actions/kubeconfig
         with:
-          context: backend
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/api:staging
-            ghcr.io/${{ github.repository }}/api:${{ github.sha }}
+          cluster-name: ${{ vars.EKS_CLUSTER_NAME_STAGING }}
+          aws-region:   ${{ vars.AWS_REGION }}
 
-      - name: Deploy to K8s Staging
-        uses: azure/k8s-deploy@v4
+      - name: Fetch terraform output (REPLACE_* 토큰 채우기 위함)
+        # terraform output 은 별도 RO 워크플로가 S3 에 미리 떨궈놓는 패턴. 여기선 secret 으로 인입 가능.
+        run: |
+          if [[ -n "${{ secrets.TF_OUTPUT_STAGING_JSON }}" ]]; then
+            echo "${{ secrets.TF_OUTPUT_STAGING_JSON }}" | base64 -d > /tmp/agentoe-tf-staging.json
+          else
+            # S3 옵션 — 변수 TF_OUTPUT_S3_URI 가 있으면 다운로드
+            aws s3 cp "${{ vars.TF_OUTPUT_S3_URI_STAGING }}" /tmp/agentoe-tf-staging.json
+          fi
+          jq 'keys' /tmp/agentoe-tf-staging.json
+
+      - uses: ./.github/actions/helm-deploy
         with:
-          namespace: agentoe-staging
-          manifests: k8s/staging/
-          images: ghcr.io/${{ github.repository }}/api:${{ github.sha }}
-          strategy: rolling
+          chart-path:  ${{ matrix.chart_path }}
+          release:     ${{ matrix.release }}
+          namespace:   agentoe-staging
+          values-file: skeleton/deploy/helm/values/staging/${{ matrix.service }}.values.yaml
+          image-tag:   ${{ needs.resolve.outputs.image_tag }}
+          smoke-url:   ${{ matrix.smoke_url }}
+          smoke-port:  ${{ matrix.smoke_port }}
+          rollback-on-failure: "true"
 
-      - name: Notify Slack
-        uses: slackapi/slack-github-action@v1
+      - name: Slack notify (success)
+        if: success()
+        uses: slackapi/slack-github-action@v1.27.0
         with:
           payload: |
             {
-              "text": "✅ AgentOE Staging 배포 완료 - <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Run #${{ github.run_number }}>",
-              "channel": "#ops-deploy"
+              "text": ":rocket: staging *${{ matrix.service }}* 배포 OK — `${{ needs.resolve.outputs.image_tag }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>"
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DEPLOY }}
+
+      - name: Slack notify (failure)
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": ":x: staging *${{ matrix.service }}* 배포 실패 — `${{ needs.resolve.outputs.image_tag }}` (자동 롤백 시도)\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DEPLOY }}

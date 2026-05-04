@@ -1,0 +1,104 @@
+# 인프라 / 클러스터 자체 알람 — kube-prometheus-stack 기본과 별개로 우리 워크로드 한정.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: agentoe-infra-alerting
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: agentoe
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: agentoe.infra.pods
+      rules:
+        - alert: AgentoePodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace=~"agentoe.*"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: page
+            service: "{{ $labels.container }}"
+          annotations:
+            summary: "[page] Pod restart loop — {{ $labels.namespace }}/{{ $labels.pod }} restarted >3 in 15m"
+
+        - alert: AgentoePodNotReady
+          expr: |
+            sum by (namespace, pod) (
+              kube_pod_status_ready{condition="false",namespace=~"agentoe.*"}
+            ) > 0
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "[ticket] Pod NotReady > 10m — {{ $labels.namespace }}/{{ $labels.pod }}"
+
+        - alert: AgentoeDeploymentReplicasMismatch
+          expr: |
+            (
+              kube_deployment_status_replicas{namespace=~"agentoe.*"}
+              !=
+              kube_deployment_spec_replicas{namespace=~"agentoe.*"}
+            )
+          for: 15m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "[ticket] Deployment replica mismatch (15m) — {{ $labels.namespace }}/{{ $labels.deployment }}"
+
+    - name: agentoe.infra.resources
+      rules:
+        - alert: AgentoeHighCPU
+          # container 의 CPU usage / request > 0.9 가 5분 지속
+          expr: |
+            sum by (namespace, pod, container) (
+              rate(container_cpu_usage_seconds_total{namespace=~"agentoe.*",container!=""}[5m])
+            )
+            /
+            sum by (namespace, pod, container) (
+              kube_pod_container_resource_requests{namespace=~"agentoe.*",resource="cpu"}
+            )
+            > 0.9
+          for: 5m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "[ticket] CPU > 90% of request (5m) — {{ $labels.pod }}/{{ $labels.container }}"
+
+        - alert: AgentoeMemoryPressure
+          expr: |
+            sum by (namespace, pod, container) (
+              container_memory_working_set_bytes{namespace=~"agentoe.*",container!=""}
+            )
+            /
+            sum by (namespace, pod, container) (
+              kube_pod_container_resource_limits{namespace=~"agentoe.*",resource="memory"}
+            )
+            > 0.9
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "[ticket] Memory > 90% of limit — OOM risk — {{ $labels.pod }}"
+
+    - name: agentoe.infra.deps
+      rules:
+        - alert: ExternalSecretSyncFailure
+          expr: |
+            external_secrets_sync_calls_error{exported_namespace=~"agentoe.*"} > 0
+          for: 10m
+          labels:
+            severity: page
+            service: external-secrets
+          annotations:
+            summary: "[page] ExternalSecret sync failing — {{ $labels.exported_namespace }}/{{ $labels.name }}"
+            description: "ESO 가 시크릿을 동기화 못 함. 다음 rotation 시 Pod 가 stale 한 값으로 부팅 위험."
+
+        - alert: PrometheusTargetDown
+          expr: |
+            up{job=~"agentoe-.*"} == 0
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "[ticket] Prometheus scrape target down (10m) — job={{ $labels.job }} pod={{ $labels.pod }}"

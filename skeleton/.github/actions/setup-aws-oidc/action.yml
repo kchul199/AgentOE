@@ -1,0 +1,38 @@
+name: "Setup AWS via OIDC"
+description: "GitHub OIDC 토큰으로 AWS Role 을 assume 하고 region 을 설정한다. 워크로드별 role 만 분리해서 권한 최소화."
+
+inputs:
+  role-arn:
+    description: "AssumeRole 할 IAM Role ARN (Terraform github-oidc 모듈 output)"
+    required: true
+  aws-region:
+    description: "기본 region (ex: ap-northeast-2)"
+    required: true
+  role-session-name:
+    description: "STS 세션 이름 — 감사 로그에 남음"
+    required: false
+    default: "github-actions-${{ github.run_id }}"
+  role-duration-seconds:
+    description: "세션 유효 시간 (기본 1h)"
+    required: false
+    default: "3600"
+
+runs:
+  using: composite
+  steps:
+    - name: Configure AWS credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+        role-session-name: ${{ inputs.role-session-name }}
+        role-duration-seconds: ${{ inputs.role-duration-seconds }}
+        # 마스킹 — 자동 출력 제거.
+        mask-aws-account-id: true
+
+    - name: Verify identity
+      shell: bash
+      run: |
+        echo "::group::AWS caller identity"
+        aws sts get-caller-identity
+        echo "::endgroup::"

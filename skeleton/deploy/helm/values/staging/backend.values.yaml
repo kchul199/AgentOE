@@ -1,0 +1,123 @@
+# ──────────────────────────────────────────────────────────────────────────
+# agentoe-backend  ·  staging override
+# 적용:
+#   helm upgrade --install agentoe-backend ./agentoe-backend \
+#     -n agentoe-staging --create-namespace \
+#     -f values/staging/backend.values.yaml
+#
+# REPLACE_* 토큰은 terraform output 결과로 envsubst 또는 yq 로 채우거나,
+# CI 단계에서 helm --set 으로 override.
+# ──────────────────────────────────────────────────────────────────────────
+
+image:
+  repository: REPLACE_ECR_REGISTRY/agentoe-staging/backend
+  tag: ""    # CI 가 git sha 로 설정
+
+# ── 스테이징 규모 (작게) ────────────────────────────────────────────────
+replicaCount: 2
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+pdb:
+  enabled: true
+  minAvailable: 1   # min=2 환경 → 1개는 항상 살아있음 보장
+
+# ── 도메인 / 인증서 ─────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /api/v1/livez
+    alb.ingress.kubernetes.io/load-balancer-attributes: |
+      idle_timeout.timeout_seconds=3600,
+      routing.http2.enabled=true
+    # ALB 그룹 — frontend 와 같은 LB 공유 (단일 LB / 두 호스트).
+    alb.ingress.kubernetes.io/group.name: agentoe-staging-public
+    alb.ingress.kubernetes.io/group.order: "100"
+    alb.ingress.kubernetes.io/certificate-arn: "REPLACE_ACM_ARN_STAGING"
+  hosts:
+    - host: api-staging.agentoe.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+# ── ServiceAccount IRSA ─────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "REPLACE_BACKEND_IRSA_ROLE_ARN"
+
+# ── Endpoints (Terraform output 으로 채움) ─────────────────────────────
+endpoints:
+  MONGODB_HOST: "REPLACE_ATLAS_SRV_HOST"
+  MONGODB_DB_NAME: "agentoe"
+  REDIS_HOST: "REPLACE_REDIS_PRIMARY_HOST"
+  REDIS_PORT: "6379"
+  JWKS_URL: "https://auth-staging.agentoe.io/.well-known/jwks.json"
+  JWT_ISSUER: "https://auth-staging.agentoe.io/"
+  JWT_AUDIENCE: "agentoe-api-staging"
+
+# ── Config 오버라이드 ──────────────────────────────────────────────────
+config:
+  ENVIRONMENT: "staging"
+  LOG_LEVEL: "DEBUG"
+  CORS_ORIGINS: '["https://app-staging.agentoe.io"]'
+  WS_ALLOWED_ORIGINS: '["https://app-staging.agentoe.io"]'
+  REDIS_POOL_SIZE: "20"
+  MONGODB_POOL_SIZE: "30"
+  HTTP_CONNECT_TIMEOUT: "2.0"
+  HTTP_READ_TIMEOUT: "8.0"
+  STT_TIMEOUT_SECONDS: "4.0"
+  LLM_TIMEOUT_SECONDS: "6.0"
+  TTS_TIMEOUT_SECONDS: "3.0"
+  SHUTDOWN_DRAIN_TIMEOUT_SECONDS: "30"
+  SHUTDOWN_ACTIVE_CALL_ANNOUNCE: "true"
+  PII_MASKING_ENABLED: "true"
+  PII_RAW_PERSIST_ENABLED: "true"   # staging 에서만 디버깅용 raw 저장
+  AUDIO_PERSIST_ENABLED: "true"     # 동일
+  SESSION_RETENTION_DAYS: "7"
+  AUDIT_RETENTION_DAYS: "30"
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_PER_IP_PER_MIN: "300"
+  RATE_LIMIT_PER_TENANT_PER_MIN: "10000"
+  IDEMPOTENCY_ENABLED: "true"
+  IDEMPOTENCY_TTL_SECONDS: "600"
+  AGENTIC_DISABLED: "false"
+  AGENTIC_TENANTS: ""
+  AGENTIC_CANARY_PERCENT: "100"     # staging 은 100% agentic
+
+# ── External Secrets ────────────────────────────────────────────────────
+externalSecrets:
+  enabled: true
+  secretsPrefix: "agentoe/staging"
+
+# ── gRPC server (vbgw bridge → backend VoicebotAiService) ───────────────
+container:
+  port: 8000
+  workers: 2
+  grpcEnabled: true
+  grpcPort: 50051
+
+# vbgw_v2 는 같은 클러스터의 별도 namespace `vbgw-staging` 에 배포 가정.
+networkPolicy:
+  enabled: false              # 활성화 시 vbgw 네임스페이스 라벨 필요
+  ingress:
+    fromIngressNamespace: "ingress-nginx"
+    fromMonitoringNamespace: "monitoring"
+    fromVbgwNamespace: "vbgw-staging"
