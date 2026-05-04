@@ -139,8 +139,10 @@ opt-in dev 도구. 운영 배포 X. backend integration test 용.
 | 후보                               | 무엇                                                                       | 의존성     |
 |------------------------------------|----------------------------------------------------------------------------|------------|
 | **푸시 + PR open + main 머지**     | feat/monorepo-merge push → PR → CI green → merge commit (squash 금지)      | 사용자 host |
-| **vbgw-ai → backend cutover 실행** | `docs/runbook/vbgw-ai-cutover.md` 의 4 stage. dev smoke 3회 OK 후 진행      | M 머지 후  |
-| **Production cutover + DR**        | environments/prod terraform stack, Velero PV 백업, region failover         | Phase 1 ✓  |
+| **cutover Stage A (staging 100%)** | `./scripts/cutover/stage-a-staging.sh` — 자동 preflight + helm + smoke + 게이트 + 롤백 | 머지 후 |
+| **prod cutover gates**             | Load → Chaos → DR drill → Security → On-call → 영업 (`docs/runbook/prod-cutover-gates.md`) | Stage A 후 |
+| **prod cutover Stage B-D**         | 10% / 50% / 100% canary (`docs/runbook/vbgw-ai-cutover.md`)                | gates 통과 후 |
+| **DR drill 분기 1회**              | `docs/runbook/disaster-recovery.md` §2 — Velero 복원 검증                    | prod 안정 후 |
 | **Security hardening**             | Kyverno, Falco, cosign, Linkerd mTLS                                       | 인프라 안정 |
 | **Load testing + Chaos**           | k6 + chaos-mesh                                                            | Phase 3 ✓  |
 | **Tracing (Tempo) + Loki**         | OTel exporter + Promtail                                                   | Phase 3 권장 |
@@ -183,7 +185,8 @@ for m in services/vbgw-ai services/vbgw-bridge services/vbgw-orchestrator; do (c
 
 ## 9. 의도적 제외
 
-- WAFv2 규칙 자체 / multi-region / 백업 자동화 (Velero) / Tracing OTel / Image signing cosign / Load test k6 / vbgw fuzz job / 실 cutover 실행
+- WAFv2 규칙 자체 (Phase P-A 변수만 — 규칙은 별도) / multi-region 활성화 (`atlas_dr_region_enabled=false` default) / Velero S3 cross-region replication / Tracing OTel / Image signing cosign / Load test k6 (Gate A 자동화) / Chaos-mesh (Gate B) / vbgw fuzz job / 실 cutover 실행 (Stage A부터 사람 의사결정).
+- Phase P-A 의 prod terraform 은 작성 완료 — `terraform apply` 는 사람이 실행 (AWS credential / Atlas key 필요).
 
 ## 10. 참조
 

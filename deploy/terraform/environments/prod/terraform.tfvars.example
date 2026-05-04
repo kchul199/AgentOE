@@ -1,0 +1,26 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Prod terraform.tfvars 템플릿 — 실제 값은 별도 파일로 관리, gitignore.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Atlas
+atlas_org_id = "REPLACE_ATLAS_ORG_ID"
+
+# Admin CIDR — VPN exit IP 만 (staging 보다 더 좁게)
+admin_cidrs = [
+  "203.0.113.10/32",   # office VPN exit
+  # "10.99.0.0/16",     # corporate net (옵션)
+]
+
+# 도메인
+domain_name = "agentoe.io"
+
+# WAFv2 (별도 모듈/콘솔에서 관리, ARN 만 주입)
+wafv2_acl_arn = "arn:aws:wafv2:ap-northeast-2:REPLACE_ACCOUNT_ID:regional/webacl/agentoe-prod/REPLACE_ID"
+
+# DR
+dr_region                = "ap-northeast-1"
+atlas_dr_region_enabled  = false   # multi-region Atlas 비용 큼 — 결정 후 활성
+
+# Velero
+velero_backup_retention_days = 90
+velero_backup_bucket_force_destroy = false   # 실수 destroy 보호

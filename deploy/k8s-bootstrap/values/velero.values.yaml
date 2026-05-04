@@ -1,0 +1,101 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Velero — k8s manifests + EBS volume snapshot 백업
+#
+# 적용:
+#   helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts
+#   helm -n velero upgrade --install velero vmware-tanzu/velero \
+#     --version 7.2.1 \
+#     --create-namespace \
+#     -f deploy/k8s-bootstrap/values/velero.values.yaml \
+#     --set serviceAccount.server.annotations."eks\.amazonaws\.com/role-arn"=$(terraform output -raw velero_role_arn) \
+#     --set configuration.backupStorageLocation[0].bucket=$(terraform output -raw velero_backup_bucket) \
+#     --set configuration.backupStorageLocation[0].config.region=$AWS_REGION \
+#     --set configuration.volumeSnapshotLocation[0].config.region=$AWS_REGION
+#
+# 그 후:
+#   kubectl apply -f deploy/k8s-bootstrap/manifests/velero-schedules.yaml
+# ──────────────────────────────────────────────────────────────────────────
+
+# ── 이미지 ────────────────────────────────────────────────────────────────
+image:
+  repository: velero/velero
+  tag: v1.14.0
+  pullPolicy: IfNotPresent
+
+# ── Plugin (AWS) ─────────────────────────────────────────────────────────
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.10.0
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - name: plugins
+        mountPath: /target
+
+# ── ServiceAccount + IRSA ─────────────────────────────────────────────────
+serviceAccount:
+  server:
+    create: true
+    name: velero
+    # IRSA — terraform 의 velero_role_arn 으로 외부에서 주입 (helm --set).
+    annotations: {}
+
+# ── Velero 설정 ──────────────────────────────────────────────────────────
+configuration:
+  backupStorageLocation:
+    - name: aws-default
+      provider: aws
+      bucket: REPLACE_VELERO_BUCKET    # terraform output velero_backup_bucket
+      default: true
+      config:
+        region: ap-northeast-2
+        # IAM 으로 인증 — credential file 불필요
+        # checksumAlgorithm: ""        # MinIO 사용 시 필요
+        kmsKeyId: ""                    # SSE-KMS 사용 시
+
+  volumeSnapshotLocation:
+    - name: aws-default
+      provider: aws
+      config:
+        region: ap-northeast-2
+
+  # 기본 backup TTL — schedule 별 override 가능
+  defaultVolumesToFsBackup: false       # EBS snapshot 우선 — fs (restic/kopia) 폴백 X
+  uploaderType: kopia                   # restic 보다 빠름
+
+  features: ""
+
+  defaultBackupTTL: 720h                # 30일 default (schedule 별 override)
+
+# ── 리소스 제한 ──────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# ── 메트릭 ────────────────────────────────────────────────────────────────
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+
+# ── Cleanup CronJob (실패 backup 정리) ───────────────────────────────────
+cleanUpCRDs: false       # cleanup hook 이 CRD 까지 지우면 기존 backup 분실
+
+# ── nodeAgent (kopia/restic backup pod) ───────────────────────────────────
+deployNodeAgent: true
+nodeAgent:
+  podVolumePath: /var/lib/kubelet/pods
+  privileged: true
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  tolerations: []

@@ -1,0 +1,81 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Velero Schedule — 일일/주간/월간 백업
+#
+# 적용 후:
+#   velero get schedules
+#   velero get backups
+#   velero describe backup <name>
+#
+# 복원:
+#   velero restore create --from-backup <name>
+#   velero restore create --from-backup <name> \
+#     --include-namespaces agentoe \
+#     --restore-volumes=true
+# ──────────────────────────────────────────────────────────────────────────
+
+# 1) 일일 — 모든 워크로드 namespace 의 manifest + EBS snapshot. 14일 보관.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: daily-agentoe-and-vbgw
+  namespace: velero
+  labels:
+    app.kubernetes.io/part-of: velero
+spec:
+  schedule: "0 18 * * *"        # 매일 03:00 KST = 18:00 UTC 이전 날
+  template:
+    includedNamespaces:
+      - agentoe
+      - vbgw
+      - external-secrets
+      - cert-manager
+      - monitoring
+    includedResources:
+      - "*"
+    excludedResources:
+      - events
+      - events.events.k8s.io
+    snapshotVolumes: true       # EBS snapshot 포함 (Mongo PVC 가 있다면)
+    storageLocation: aws-default
+    volumeSnapshotLocations: [aws-default]
+    ttl: 336h                    # 14일
+
+---
+# 2) 주간 — 위와 동일 + 90일 장기 보관 + cluster-scope 리소스 포함
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: weekly-full-cluster
+  namespace: velero
+spec:
+  schedule: "0 19 * * 0"        # 매 일요일 04:00 KST
+  template:
+    includeClusterResources: true
+    includedResources: ["*"]
+    excludedResources:
+      - events
+      - events.events.k8s.io
+    snapshotVolumes: true
+    storageLocation: aws-default
+    volumeSnapshotLocations: [aws-default]
+    ttl: 2160h                   # 90일
+
+---
+# 3) 월간 — cold storage 격 (S3 lifecycle 이 Glacier 로 이동 가능). 365일 보관.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: monthly-archive
+  namespace: velero
+spec:
+  schedule: "0 19 1 * *"        # 매 월 1일 04:00 KST
+  template:
+    includeClusterResources: true
+    includedResources: ["*"]
+    excludedResources:
+      - events
+      - events.events.k8s.io
+    snapshotVolumes: true
+    storageLocation: aws-default
+    volumeSnapshotLocations: [aws-default]
+    ttl: 8760h                   # 365일
