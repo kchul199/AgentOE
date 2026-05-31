@@ -20,7 +20,7 @@ try:
     from langgraph.graph.message import add_messages
 except ImportError:  # pragma: no cover — langgraph 미설치 시 placeholder
 
-    def add_messages(left: list, right: list) -> list:
+    def add_messages(left: list, right: list) -> list:  # type: ignore[misc]
         """Fallback reducer: langgraph 미설치 환경에서도 동작"""
         return (left or []) + (right or [])
 

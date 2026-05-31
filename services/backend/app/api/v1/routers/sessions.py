@@ -159,7 +159,7 @@ async def _get_turns_with_offset(
     offset: int,
 ) -> list[dict]:
     """offset 지원 turn 조회 (history_col aggregate)."""
-    pipeline = [
+    pipeline: list[dict[str, Any]] = [
         {"$match": {"session_id": session_id}},
         {"$sort": {"timestamp": 1}},
         {"$skip": offset},

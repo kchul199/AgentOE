@@ -113,7 +113,7 @@ def compile_scenario(scenario: Scenario, services: ServiceBundle) -> CompiledSce
         else:
             raise ValueError(f"Unknown node type: {type(node).__name__}")
 
-        builder.add_node(node.id, fn)
+        builder.add_node(node.id, fn)  # type: ignore[call-overload]
 
     # ── 엣지 추가 ──────────────────────────────────────────────────────────
     {n.id for n in scenario.nodes if isinstance(n, BranchNode)}
@@ -129,7 +129,7 @@ def compile_scenario(scenario: Scenario, services: ServiceBundle) -> CompiledSce
                 mapping["default"] = scenario.fallback_node
             # add_conditional_edges는 mapping 을 함수 반환값 → 실제 노드 id로 변환
             # dispatcher는 이미 실제 노드 id 를 반환하므로 identity 매핑 사용
-            identity_mapping = {v: v for v in mapping.values()}
+            identity_mapping: dict[Any, str] = {v: v for v in mapping.values()}
             identity_mapping["__end__"] = END
             builder.add_conditional_edges(node.id, dispatcher, identity_mapping)
         elif isinstance(node, (TransferNode, EndNode)):

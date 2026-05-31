@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -248,7 +249,7 @@ func main() {
 	slog.Info("[Shutdown 2/5] ESL: fsctl pause sent")
 	eslClient.Pause(context.Background())
 
-	remaining := sessionMgr.Count()
+	remaining := sessionMgr.Count(context.Background())
 	slog.Info("[Shutdown 3/5] Draining active sessions", "count", remaining, "timeout", "30s")
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer drainCancel()
@@ -327,7 +328,7 @@ func onChannelCreate(ctx context.Context, evt *esl.Event, sessionMgr session.Sto
 		}
 		return
 	}
-	metrics.ActiveCalls.Set(float64(sessionMgr.Count()))
+	metrics.ActiveCalls.Set(float64(sessionMgr.Count(ctx)))
 
 	slog.Info("Session created", "session_id", sessionID, "fs_uuid", fsUUID)
 }
@@ -354,7 +355,7 @@ func onChannelPark(ctx context.Context, evt *esl.Event, sessionMgr session.Store
 	}
 
 	// Start IVR machine
-	ivrMachine := ivr.NewMachine(s.SessionID, ivr.Callbacks{
+	ivrMachine := ivr.NewMachine(s.SessionID, nil, ivr.Callbacks{
 		OnRepeatMenu:  func() { slog.Info("IVR: menu repeat", "session", s.SessionID) },
 		OnEnterAiChat: func() { slog.Info("IVR: entering AI chat", "session", s.SessionID) },
 		OnTransfer: func() {
