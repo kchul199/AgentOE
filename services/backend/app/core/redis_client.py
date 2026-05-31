@@ -6,8 +6,8 @@
     호출부가 Mongo fallback 또는 세션 재시작을 선택할 수 있게 함
   - Hot path에 불필요한 await 추가 금지 (Latency is King)
 """
+
 import json
-import logging
 from typing import Any
 
 try:
@@ -35,6 +35,7 @@ _redis: "aioredis.Redis | None" = None
 # scoped_key("kill_switch:feature", target_id)
 #   → "agentoe:kill_switch:feature:tid"  (tenant scope 없음: 글로벌 키)
 
+
 def scoped_key(kind: str, *parts: str, tenant_id: str | None = None) -> str:
     """Namespaced Redis key builder. tenant 스코프 강제 시 prefix 자동 삽입."""
     pieces: list[str] = [settings.REDIS_KEY_NAMESPACE]
@@ -58,7 +59,7 @@ async def init_redis() -> None:
         health_check_interval=30,
         retry_on_timeout=True,
     )
-    await _redis.ping()
+    await _redis.ping()  # type: ignore[misc]
     logger.info("Redis connected", pool_size=settings.REDIS_POOL_SIZE)
 
 
@@ -82,7 +83,9 @@ def get_redis() -> aioredis.Redis:
 SESSION_TTL = 3600  # 1시간
 
 
-async def set_session_state(session_id: str, state: dict[str, Any], tenant_id: str | None = None) -> bool:
+async def set_session_state(
+    session_id: str, state: dict[str, Any], tenant_id: str | None = None
+) -> bool:
     """Save session state. Redis 장애 시 False 반환(로그만 남김)."""
     try:
         key = scoped_key("session", session_id, tenant_id=tenant_id)
@@ -146,7 +149,9 @@ async def cache_kill_switch(scope: str, target_id: str, active: bool) -> None:
         key = scoped_key("kill_switch", scope, target_id)
         await get_redis().setex(key, KILL_SWITCH_TTL, "1" if active else "0")
     except RedisError as e:
-        logger.warning("redis_kill_switch_cache_failed", scope=scope, target_id=target_id, error=str(e))
+        logger.warning(
+            "redis_kill_switch_cache_failed", scope=scope, target_id=target_id, error=str(e)
+        )
 
 
 async def get_kill_switch_cached(scope: str, target_id: str) -> bool | None:
@@ -158,7 +163,9 @@ async def get_kill_switch_cached(scope: str, target_id: str) -> bool | None:
             return None
         return val == "1"
     except RedisError as e:
-        logger.warning("redis_kill_switch_get_failed", scope=scope, target_id=target_id, error=str(e))
+        logger.warning(
+            "redis_kill_switch_get_failed", scope=scope, target_id=target_id, error=str(e)
+        )
         return None
 
 
@@ -178,9 +185,11 @@ async def enqueue_failed_turn(payload: dict[str, Any]) -> str | None:
     반드시 non-blocking: Redis 장애가 상위 요청을 막아서는 안 됨.
     """
     try:
-        serialized = {k: json.dumps(v, default=str) if not isinstance(v, str) else v
-                      for k, v in payload.items()}
-        sid = await get_redis().xadd(DLQ_STREAM, serialized, maxlen=DLQ_MAXLEN, approximate=True)
+        serialized = {
+            k: json.dumps(v, default=str) if not isinstance(v, str) else v
+            for k, v in payload.items()
+        }
+        sid = await get_redis().xadd(DLQ_STREAM, serialized, maxlen=DLQ_MAXLEN, approximate=True)  # type: ignore[arg-type]
         return sid
     except RedisError as e:
         logger.error("dlq_enqueue_failed", error=str(e), payload_keys=list(payload.keys()))
@@ -215,7 +224,7 @@ async def rate_limit_check(bucket: str, limit: int, window_seconds: int = 60) ->
         return True
     try:
         key = scoped_key("rl", bucket)
-        result = await get_redis().eval(_RATE_LIMIT_LUA, 1, key, limit, window_seconds)
+        result = await get_redis().eval(_RATE_LIMIT_LUA, 1, key, limit, window_seconds)  # type: ignore[misc]
         return result == 1
     except RedisError as e:
         logger.warning("rate_limit_check_failed", bucket=bucket, error=str(e))

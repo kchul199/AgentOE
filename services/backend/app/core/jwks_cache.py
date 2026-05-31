@@ -12,11 +12,12 @@ JWKS Cache — JWT 공개키 조회 캐시 + kid 회전 지원.
   - 공개키 JSON 은 https 로만 받는다 (환경변수 기반 정책).
   - TTL 내 연속 실패는 백오프 (동시 폭주 방지).
 """
+
 from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -66,8 +67,7 @@ class JWKSCache:
 
         # 1차 캐시 조회 — _entry 가 None 이면 동기 갱신 (miss), 있으면 hit
         was_cached = self._entry is not None and (
-            time.monotonic() - self._entry.fetched_at
-            < settings.JWKS_CACHE_TTL_SECONDS
+            time.monotonic() - self._entry.fetched_at < settings.JWKS_CACHE_TTL_SECONDS
         )
         entry = await self._ensure_fresh()
         if entry is None:
@@ -126,9 +126,7 @@ class JWKSCache:
                     resp.raise_for_status()
                     data = resp.json()
                 keys = data.get("keys", []) or []
-                by_kid = {
-                    k["kid"]: k for k in keys if "kid" in k
-                }
+                by_kid = {k["kid"]: k for k in keys if "kid" in k}
                 # kid 없는 단일 키 JWKS 도 지원 (kid=None 으로 저장)
                 if not by_kid and keys:
                     by_kid = {"_default_": keys[0]}
@@ -143,10 +141,11 @@ class JWKSCache:
                     kids=list(by_kid.keys()),
                 )
                 return self._entry
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 self._last_fail_at = time.monotonic()
                 record_jwks_refresh(
-                    time.monotonic() - start, success=False,
+                    time.monotonic() - start,
+                    success=False,
                 )
                 logger.warning(
                     "jwks_cache.refresh_failed",

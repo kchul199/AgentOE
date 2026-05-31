@@ -20,9 +20,9 @@ Integration (E2E) — JWKS mock + fakeredis 기반 인증/쿼터 경로 검증.
   - unit test 로는 드러나지 않는 **상호작용 regression** (예: httpx 버전 변경 시 JWKS
     파싱 깨짐) 을 잡는다.
 """
+
 from __future__ import annotations
 
-import json
 import os
 import sys
 import unittest.mock as _mock
@@ -40,17 +40,27 @@ os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/gcp.json")
 
 # 테스트 실행 환경에 SOCKS 프록시 env 가 설정되어 있을 수 있음 → httpx 가
 # 내부 localhost mock 서버를 프록시로 보내려다 실패. 통합 테스트에서는 제거.
-for _proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
-                   "http_proxy", "https_proxy", "all_proxy"):
+for _proxy_var in (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+):
     os.environ.pop(_proxy_var, None)
 
 # ── 외부 모듈 모킹 (integration test 모두 공통 패턴) ─────────────────────────
 # test_metrics_api 와 동일한 트릭 — 실제 motor/groq 등이 설치되어 있지 않은
 # 환경에서도 import 가 성공해야 통합 경로가 실행된다.
 for _mod in [
-    "motor", "motor.motor_asyncio",
-    "pymongo", "pymongo.errors",
-    "groq", "google.cloud", "google.cloud.texttospeech",
+    "motor",
+    "motor.motor_asyncio",
+    "pymongo",
+    "pymongo.errors",
+    "groq",
+    "google.cloud",
+    "google.cloud.texttospeech",
     "google.cloud.texttospeech_v1",
     "grpc",
 ]:
@@ -72,7 +82,6 @@ from app.core import jwks_cache as jwks_mod
 from app.core import metrics as m
 from app.core import quota as quota_mod
 from app.core import redis_client as rc
-
 
 pytestmark = pytest.mark.integration
 
@@ -183,7 +192,9 @@ async def test_jwks_miss_then_hit(fresh_jwks_cache, configure_jwks, httpserver):
 
 
 async def test_jwks_kid_rotation_triggers_force_refresh(
-    fresh_jwks_cache, configure_jwks, httpserver,
+    fresh_jwks_cache,
+    configure_jwks,
+    httpserver,
 ):
     """
     처음엔 k1 만 발급 → k1 캐시 → 이후 IdP 가 k2 추가.
@@ -212,7 +223,9 @@ async def test_jwks_kid_rotation_triggers_force_refresh(
 
 
 async def test_jwks_endpoint_failure_keeps_stale_cache(
-    fresh_jwks_cache, configure_jwks, httpserver,
+    fresh_jwks_cache,
+    configure_jwks,
+    httpserver,
 ):
     """
     캐시에 유효 값이 있는 상태에서 원격이 장애 → stale 반환 (fail-open).
@@ -238,7 +251,9 @@ async def test_jwks_endpoint_failure_keeps_stale_cache(
 
 
 async def test_jwks_when_no_cache_and_fetch_fails_returns_none(
-    fresh_jwks_cache, configure_jwks, httpserver,
+    fresh_jwks_cache,
+    configure_jwks,
+    httpserver,
 ):
     """캐시 전무 + fetch 실패 = None 반환 + `fail` 메트릭 기록."""
     httpserver.expect_request("/jwks.json").respond_with_data("oops", status=503)
@@ -255,10 +270,14 @@ async def test_quota_under_limit_ok(fake_redis, monkeypatch):
     """카운터 0 → ok 경로."""
     monkeypatch.setattr(quota_mod.settings, "LLM_QUOTA_ENABLED", True)
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_DAILY_TOKEN_QUOTA_DEFAULT", 1_000_000,
+        quota_mod.settings,
+        "LLM_DAILY_TOKEN_QUOTA_DEFAULT",
+        1_000_000,
     )
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_DAILY_COST_QUOTA_CENTS_DEFAULT", 10_000,
+        quota_mod.settings,
+        "LLM_DAILY_COST_QUOTA_CENTS_DEFAULT",
+        10_000,
     )
 
     status = await quota_mod.enforce_quota("t_acme")
@@ -271,10 +290,14 @@ async def test_quota_over_tokens_fallback(fake_redis, monkeypatch):
     monkeypatch.setattr(quota_mod.settings, "LLM_QUOTA_ENABLED", True)
     monkeypatch.setattr(quota_mod.settings, "LLM_DAILY_TOKEN_QUOTA_DEFAULT", 100)
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_DAILY_COST_QUOTA_CENTS_DEFAULT", 0,  # 무제한
+        quota_mod.settings,
+        "LLM_DAILY_COST_QUOTA_CENTS_DEFAULT",
+        0,  # 무제한
     )
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_QUOTA_EXCEEDED_BEHAVIOR", "fallback",
+        quota_mod.settings,
+        "LLM_QUOTA_EXCEEDED_BEHAVIOR",
+        "fallback",
     )
 
     # 사용량 초과를 만들어둠
@@ -292,10 +315,14 @@ async def test_quota_over_cost_reject(fake_redis, monkeypatch):
     monkeypatch.setattr(quota_mod.settings, "LLM_QUOTA_ENABLED", True)
     monkeypatch.setattr(quota_mod.settings, "LLM_DAILY_TOKEN_QUOTA_DEFAULT", 0)
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_DAILY_COST_QUOTA_CENTS_DEFAULT", 500,
+        quota_mod.settings,
+        "LLM_DAILY_COST_QUOTA_CENTS_DEFAULT",
+        500,
     )
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_QUOTA_EXCEEDED_BEHAVIOR", "reject",
+        quota_mod.settings,
+        "LLM_QUOTA_EXCEEDED_BEHAVIOR",
+        "reject",
     )
 
     await quota_mod.commit_usage("t_acme", tokens=0, cost_cents=900.0)
@@ -312,10 +339,14 @@ async def test_quota_warn_policy_passes_through(fake_redis, monkeypatch):
     monkeypatch.setattr(quota_mod.settings, "LLM_QUOTA_ENABLED", True)
     monkeypatch.setattr(quota_mod.settings, "LLM_DAILY_TOKEN_QUOTA_DEFAULT", 50)
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_DAILY_COST_QUOTA_CENTS_DEFAULT", 0,
+        quota_mod.settings,
+        "LLM_DAILY_COST_QUOTA_CENTS_DEFAULT",
+        0,
     )
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_QUOTA_EXCEEDED_BEHAVIOR", "warn",
+        quota_mod.settings,
+        "LLM_QUOTA_EXCEEDED_BEHAVIOR",
+        "warn",
     )
     await quota_mod.commit_usage("t_acme", tokens=100)
 
@@ -342,7 +373,9 @@ async def test_quota_redis_failure_fail_open(monkeypatch):
     """
     monkeypatch.setattr(quota_mod.settings, "LLM_QUOTA_ENABLED", True)
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_DAILY_TOKEN_QUOTA_DEFAULT", 100,
+        quota_mod.settings,
+        "LLM_DAILY_TOKEN_QUOTA_DEFAULT",
+        100,
     )
 
     class _Exploding:

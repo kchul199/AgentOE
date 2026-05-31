@@ -33,7 +33,7 @@ function makeMeta(overrides: Partial<Scenario> = {}): Omit<Scenario, "nodes" | "
     tenant_id: "t_acme",
     version: 1,
     name: "Greeting",
-    entry: "start",
+    entry: "start_1",
     fallback_node: null,
     limits: {
       max_turns: 30,
@@ -53,21 +53,13 @@ function makeScenario(overrides: Partial<Scenario> = {}): Scenario {
     tenant_id: "t_acme",
     version: 1,
     name: "Greeting",
-    entry: "start",
+    entry: "start_1",
     fallback_node: null,
     nodes: [
       {
-        id: "start",
-        type: "llm",
-        config: {
-          model: "groq-llama-4-scout",
-          fallback_model: "groq-llama-3.3-70b",
-          system_prompt: "안녕하세요",
-          temperature: 0.7,
-          max_tokens: 512,
-          streaming: true,
-          enable_filler: true,
-        },
+        id: "start_1",
+        type: "start",
+        config: { trigger_type: "inbound_call", greeting_message: null },
       },
       {
         id: "done",
@@ -75,7 +67,7 @@ function makeScenario(overrides: Partial<Scenario> = {}): Scenario {
         config: { closing_message: "감사합니다" },
       },
     ],
-    edges: [{ from: "start", to: "done" }],
+    edges: [{ from: "start_1", to: "done" }],
     tags: [],
     published: false,
   });
@@ -100,13 +92,13 @@ describe("toGraph / fromGraph round-trip", () => {
   it("엣지 from / to / when / label 이 보존된다", () => {
     const scn = makeScenario({
       edges: [
-        { from: "start", to: "done", when: "intent == 'bye'", label: "bye branch" },
+        { from: "start_1", to: "done", when: "intent == 'bye'", label: "bye branch" },
       ],
     });
     const graph = toGraph(scn);
     const back = fromGraph({ graph, meta: makeMeta({ entry: scn.entry }) });
     expect(back.edges).toHaveLength(1);
-    expect(back.edges[0].from).toBe("start");
+    expect(back.edges[0].from).toBe("start_1");
     expect(back.edges[0].to).toBe("done");
     expect(back.edges[0].when).toBe("intent == 'bye'");
     expect(back.edges[0].label).toBe("bye branch");
@@ -115,9 +107,9 @@ describe("toGraph / fromGraph round-trip", () => {
   it("positions 제공 시 toGraph 노드 position 이 덮어쓴다", () => {
     const scn = makeScenario();
     const graph = toGraph(scn, {
-      positions: { start: { x: 10, y: 20 }, done: { x: 300, y: 200 } },
+      positions: { start_1: { x: 10, y: 20 }, done: { x: 300, y: 200 } },
     });
-    const startPos = graph.nodes.find((n) => n.id === "start")!.position;
+    const startPos = graph.nodes.find((n) => n.id === "start_1")!.position;
     expect(startPos).toEqual({ x: 10, y: 20 });
   });
 
@@ -295,7 +287,7 @@ describe("validateGraph", () => {
       ...makeScenario(),
       edges: [
         { from: "nope_src", to: "done" },
-        { from: "start", to: "nope_dst" },
+        { from: "start_1", to: "nope_dst" },
       ],
     };
     const codes = validateGraph(scn).map((i) => i.code);

@@ -7,11 +7,12 @@ LLM Service — Groq Llama 4 Scout / 3.3 70B
   응답 완료 후 commit_usage(tenant_id, tokens=..., cost_cents=...) 로 누적.
   QuotaExceededError 는 상위(에이전틱 노드) 로 전파해 fallback 시나리오 처리.
 """
-import asyncio
+
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Any
 
 from app.core.metrics import record_llm_usage
 from app.core.quota import commit_usage, enforce_quota
@@ -24,7 +25,7 @@ from app.domain.circuit_breaker import (
 
 logger = logging.getLogger(__name__)
 
-FILLER_THRESHOLD_MS = 500   # 이 시간 초과 시 Filler Audio 트리거
+FILLER_THRESHOLD_MS = 500  # 이 시간 초과 시 Filler Audio 트리거
 FILLER_PHRASES = [
     "잠시만요,",
     "확인해 드리겠습니다,",
@@ -92,10 +93,12 @@ class LLMService:
         if self._client is None:
             try:
                 from groq import AsyncGroq
+
                 from app.core.config import settings
+
                 self._client = AsyncGroq(api_key=settings.GROQ_API_KEY)
             except ImportError:
-                raise RuntimeError("groq package not installed")
+                raise RuntimeError("groq package not installed") from None
         return self._client
 
     def _build_messages(
@@ -167,7 +170,9 @@ class LLMService:
             if not use_fallback:
                 logger.warning("Primary LLM failed, trying fallback: %s", exc)
                 async for chunk in self.stream(
-                    user_text, history, system_prompt,
+                    user_text,
+                    history,
+                    system_prompt,
                     use_fallback=True,
                     tenant_id=tenant_id,
                     tenant_cfg=tenant_cfg,
@@ -183,7 +188,8 @@ class LLMService:
                 if elapsed_ms > FILLER_THRESHOLD_MS and not filler_triggered:
                     filler_triggered = True
                     import random
-                    filler = random.choice(FILLER_PHRASES)
+
+                    filler = random.choice(FILLER_PHRASES)  # noqa: S311
                     yield LLMChunk(text=filler, is_final=False, is_filler=True)
                 first_chunk_sent = True
 
@@ -192,7 +198,7 @@ class LLMService:
             if usage is not None:
                 tokens_used = getattr(usage, "total_tokens", 0) or 0
 
-            delta = chunk.choices[0].delta.content or ""
+            delta = chunk.choices[0].delta.content or ""  # type: ignore[attr-defined]
             if delta:
                 full_text.append(delta)
                 yield LLMChunk(text=delta, is_final=False)
@@ -213,8 +219,10 @@ class LLMService:
             )
             # Track 3: Prometheus 토큰/비용 누적 — model 레이블 포함
             record_llm_usage(
-                tenant_id, model=model,
-                tokens=tokens_used, cost_cents=cost_cents,
+                tenant_id,
+                model=model,
+                tokens=tokens_used,
+                cost_cents=cost_cents,
             )
 
         yield LLMChunk(text=joined, is_final=True)
@@ -230,13 +238,17 @@ class LLMService:
     ) -> LLMResult:
         """비스트리밍 완성 (배치 처리용)"""
         from app.core.config import settings
+
         start = time.monotonic()
         full_text = []
         filler_triggered = False
 
         async for chunk in self.stream(
-            user_text, history, system_prompt,
-            tenant_id=tenant_id, tenant_cfg=tenant_cfg,
+            user_text,
+            history,
+            system_prompt,
+            tenant_id=tenant_id,
+            tenant_cfg=tenant_cfg,
         ):
             if chunk.is_filler:
                 filler_triggered = True

@@ -1,0 +1,74 @@
+# compose.sipp.yml — SIPp 실콜 부하 테스트 컨테이너
+# 변경이력: v1.0.0 | 2026-05-05 | Phase-T | SIPp 10 CPS × 10분 부하 테스트
+#
+# 사용법:
+#   # vbgw 스택이 실행 중인 상태에서:
+#   docker compose -f docker/compose.sipp.yml run --rm sipp \
+#     -sf /scenarios/uac_10cps_audio.xml \
+#     -s 7000 -r 10 -rp 1000 -d 30000 -l 300 -m 6000 \
+#     freeswitch:5060
+#
+#   # 또는 run_10cps_10min.sh 를 통해 실행 (권장):
+#   ./services/freeswitch/scripts/run_10cps_10min.sh
+#
+# 네트워크: vbgw-net (compose.vbgw.yml 과 공유)
+#   → freeswitch, bridge, orchestrator 서비스에 직접 접근 가능
+
+version: "3.9"
+
+services:
+  sipp:
+    image: ctaloi/sipp:latest
+    platform: linux/amd64
+    container_name: agentoe-sipp
+    # SIPp는 run --rm 패턴으로 1회성 실행 — restart 없음
+    restart: "no"
+    networks:
+      - vbgw-net
+    # 시나리오 파일 및 오디오 에셋
+    volumes:
+      - ../services/freeswitch/tests/sipp:/scenarios:ro
+      - ../services/freeswitch/tests/sipp/audio:/audio:ro
+      - sipp-results:/results
+    # 미디어 포트 범위 (RTP PCMU 스트림)
+    # SIPp -mp 플래그와 일치 — 동시 300콜 × 2포트(RTP+RTCP) = 최대 600포트
+    ports:
+      - "20000-20600:20000-20600/udp"
+    environment:
+      # 컨테이너 내부에서 호스트 IP 참조 시 사용
+      - SIPP_LOCAL_IP=${SIPP_LOCAL_IP:-127.0.0.1}
+    # 기본 CMD — run --rm 사용 시 오버라이드
+    command: ["-v"]
+
+  # ─── 결과 수집 사이드카 ─────────────────────────────────────────────────────
+  # SIPp 완료 후 parse_sipp_results.py 실행용
+  sipp-analyzer:
+    image: python:3.11-slim
+    container_name: agentoe-sipp-analyzer
+    restart: "no"
+    networks:
+      - vbgw-net
+    volumes:
+      - ../services/freeswitch/scripts:/scripts:ro
+      - sipp-results:/results
+    working_dir: /results
+    entrypoint: ["python", "/scripts/parse_sipp_results.py"]
+    command: ["--stats", "/results/stats.csv", "--slo-p95", "500", "--slo-success", "99.9"]
+    profiles:
+      # `docker compose --profile analyze up sipp-analyzer` 로만 실행
+      - analyze
+
+volumes:
+  sipp-results:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      # 호스트 경로 — 상대경로는 compose.sipp.yml 위치 기준
+      device: ${SIPP_RESULTS_DIR:-../services/freeswitch/results}
+
+networks:
+  vbgw-net:
+    # compose.vbgw.yml 이 생성한 네트워크에 연결 (external)
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:-services_freeswitch}_vbgw-net

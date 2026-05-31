@@ -1,4 +1,5 @@
 """MongoDB Motor async database connection management."""
+
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from app.core.config import settings

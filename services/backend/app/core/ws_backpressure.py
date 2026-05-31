@@ -25,13 +25,13 @@ Drop 정책:
   이 모듈은 그 위에 "명시적" 큐를 둬서 우리가 drop 정책을 통제하도록 한다.
   완벽하지 않지만 테스트 가능하고 메트릭화 가능한 것이 핵심.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
 
 from app.core.metrics import (
     record_ws_drop,
@@ -52,6 +52,7 @@ _AUDIO_EVENT_NAMES = frozenset({"tts_ready"})
 @dataclass
 class QueuedEvent:
     """큐에 들어가는 단위. 직렬화된 문자열만 보유."""
+
     name: str
     payload: str  # 이미 JSON 직렬화된 상태
 
@@ -68,13 +69,15 @@ class BoundedWSSender:
         ...
         await sender.close()
     """
-    ws: object                                              # fastapi.WebSocket 또는 테스트 스텁
+
+    ws: object  # fastapi.WebSocket 또는 테스트 스텁
     tenant_id: str
     max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE
     _queue: deque[QueuedEvent] = field(default_factory=deque)
     _condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     _task: asyncio.Task[None] | None = None
     _closed: bool = False
+    _wakeup: asyncio.Future[None] | None = None
 
     async def start(self) -> None:
         if self._task is None:
@@ -139,28 +142,34 @@ class BoundedWSSender:
             return
 
         loop = asyncio.get_running_loop()
-        while not self._closed:
+        while True:
             if not self._queue:
+                # 큐가 비어있고 close 요청이면 루프 종료 (잔여 이벤트 없음)
+                if self._closed:
+                    break
                 # 대기
                 self._wakeup = loop.create_future()
                 try:
                     # 짧은 timeout 으로 주기적 체크 — close 신호 놓치지 않게.
                     await asyncio.wait_for(self._wakeup, timeout=1.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
                 finally:
                     self._wakeup = None
                 continue
 
+            # closed 여부와 무관하게 큐 잔여 이벤트는 flush (hangup 등 마지막 이벤트 보장)
             evt = self._queue.popleft()
             set_ws_queue_depth(self.tenant_id, len(self._queue))
             try:
                 await send(evt.payload)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 # 클라이언트 연결 해제 / 네트워크 오류. 이후 enqueue 모두 drop 되도록.
                 logger.debug(
                     "ws send failed (name=%s tenant=%s): %s",
-                    evt.name, self.tenant_id, exc,
+                    evt.name,
+                    self.tenant_id,
+                    exc,
                 )
                 self._closed = True
                 break
@@ -175,7 +184,7 @@ class BoundedWSSender:
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=1.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+            except (TimeoutError, asyncio.CancelledError):
                 self._task.cancel()
         set_ws_queue_depth(self.tenant_id, 0)
 

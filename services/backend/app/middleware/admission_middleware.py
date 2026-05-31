@@ -11,13 +11,14 @@ Redis 키:
   admission:{tenant_id}  →  현재 활성 세션 수 (INTEGER)
   admission:{tenant_id}:ttl_guard  →  카운터 누수 방지용 TTL 키 (24시간)
 """
+
 from __future__ import annotations
 
 import base64
 import json
 import logging
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
@@ -41,11 +42,8 @@ def _extract_tenant_id(request: Request) -> str | None:
     token: str | None = None
 
     auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        token = auth[7:]
-    else:
-        # WebSocket 업그레이드는 Authorization 헤더가 없고 query param 사용
-        token = request.query_params.get("token")
+    # WebSocket 업그레이드는 Authorization 헤더가 없고 query param 사용
+    token = auth[7:] if auth.startswith("Bearer ") else request.query_params.get("token")
 
     if not token:
         return None
@@ -62,7 +60,7 @@ def _extract_tenant_id(request: Request) -> str | None:
             payload_b64 += "=" * padding
         payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode())
         return payload.get("tenant_id")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -73,7 +71,7 @@ async def get_tenant_session_count(tenant_id: str) -> int:
     try:
         val = await get_redis().get(_ADMISSION_KEY.format(tenant_id=tenant_id))
         return int(val) if val else 0
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("admission count read failed for %s: %s", tenant_id, exc)
         return 0  # Redis 장애 시 fail-open (세션 허용)
 
@@ -93,7 +91,7 @@ async def increment_session_count(tenant_id: str) -> int:
         # 처음 키가 생성될 때(count==1)마다 TTL guard 갱신
         await redis.set(guard_key, "1", ex=_GUARD_TTL)
         return count
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("admission increment failed for %s: %s", tenant_id, exc)
         return 1
 
@@ -115,8 +113,8 @@ end
 return v
 """
     try:
-        await get_redis().eval(_LUA_DEC_FLOOR, 1, key)
-    except Exception as exc:  # noqa: BLE001
+        await get_redis().eval(_LUA_DEC_FLOOR, 1, key)  # type: ignore[misc]
+    except Exception as exc:
         logger.warning("admission decrement failed for %s: %s", tenant_id, exc)
 
 
@@ -138,12 +136,13 @@ class AdmissionControlMiddleware(BaseHTTPMiddleware):
         if self._limit is None:
             try:
                 from app.core.config import settings
+
                 self._limit = settings.MAX_SESSIONS_PER_TENANT
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self._limit = 100
         return self._limit
 
-    async def dispatch(self, request: Request, call_next) -> Response:  # type: ignore[override]
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # WS 경로가 아니면 즉시 통과
         if not request.url.path.startswith(_WS_PATH_PREFIX):
             return await call_next(request)
@@ -164,15 +163,16 @@ class AdmissionControlMiddleware(BaseHTTPMiddleware):
         if current >= limit:
             logger.warning(
                 "Admission denied: tenant=%s current=%d limit=%d",
-                tenant_id, current, limit,
+                tenant_id,
+                current,
+                limit,
             )
             return JSONResponse(
                 status_code=429,
                 content={
                     "error": "SESSION_LIMIT_EXCEEDED",
                     "message": (
-                        f"최대 동시 세션 수({limit})를 초과했습니다. "
-                        "잠시 후 다시 시도해 주세요."
+                        f"최대 동시 세션 수({limit})를 초과했습니다. 잠시 후 다시 시도해 주세요."
                     ),
                     "current_sessions": current,
                     "max_sessions": limit,

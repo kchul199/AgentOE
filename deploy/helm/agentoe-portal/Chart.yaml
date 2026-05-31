@@ -1,0 +1,20 @@
+apiVersion: v2
+name: agentoe-portal
+description: |
+  AgentOE 통합 운영 포탈 — Vite SPA (nginx 컨테이너).
+  Internal ALB 전용 (VPC 내부 접근만 허용).
+  /api/* → backend 역방향 프록시 포함.
+  SSE /api/v1/stream/* 버퍼링 해제.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.28.0-0"
+keywords:
+  - agentoe
+  - ops-portal
+  - internal
+  - spa
+  - react
+maintainers:
+  - name: agentoe-platform
+    email: platform@agentoe.io

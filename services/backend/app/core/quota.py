@@ -20,10 +20,11 @@ CLAUDE.md 원칙:
   - 카운터는 atomic INCRBY, 만료(EXPIRE) 로 자연 롤업
   - 비동기 I/O, latency 영향 최소 (1 라운드트립)
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
@@ -64,7 +65,7 @@ class QuotaStatus:
 
 
 def _today_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    return datetime.now(UTC).strftime("%Y%m%d")
 
 
 def _tokens_key(tenant_id: str) -> str:
@@ -171,7 +172,7 @@ async def commit_usage(
     *,
     tokens: int,
     cost_cents: float = 0.0,
-    ttl_seconds: int = 172800,   # 48h — 하루치 + 여유
+    ttl_seconds: int = 172800,  # 48h — 하루치 + 여유
 ) -> None:
     """
     실제 사용량 반영 (LLM 응답 완료 후). Redis 장애 시 조용히 무시 (fail-open).
@@ -188,11 +189,14 @@ async def commit_usage(
             pipe.incrby(tkey, tokens)
             pipe.expire(tkey, ttl_seconds)
         if cost_cents > 0:
-            pipe.incrby(ckey, int(round(cost_cents)))
+            pipe.incrby(ckey, round(cost_cents))
             pipe.expire(ckey, ttl_seconds)
         await pipe.execute()
     except RedisError as e:
         logger.warning(
-            "quota.commit_failed", tenant_id=tenant_id, error=str(e),
-            tokens=tokens, cost_cents=cost_cents,
+            "quota.commit_failed",
+            tenant_id=tenant_id,
+            error=str(e),
+            tokens=tokens,
+            cost_cents=cost_cents,
         )

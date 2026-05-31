@@ -3,12 +3,11 @@ Unit tests — OutboundEvent → AiResponse 매핑 + Servicer 엣지 케이스.
 
 orchestrator/Mongo 의존 없이 매핑 함수와 metadata 추출만 검증.
 """
+
 from __future__ import annotations
 
 import base64
 from unittest.mock import MagicMock
-
-import pytest
 
 from app.grpc_server.voicebot_service import (
     _extract_metadata,
@@ -17,7 +16,6 @@ from app.grpc_server.voicebot_service import (
 from app.grpc_stubs.voicebot import voicebot_pb2 as pb
 from app.services.call_session_orchestrator import OutboundEvent
 
-
 # ── _outbound_to_responses ────────────────────────────────────────────────
 
 
@@ -25,11 +23,14 @@ def test_mapping_normal_pipeline_emits_stt_tts_eot() -> None:
     audio = b"\x01\x02\x03"
     events = [
         OutboundEvent("stt_result", {"text": "안녕하세요", "is_final": True}),
-        OutboundEvent("llm_chunk",  {"text": "네 안녕하세요", "is_final": True}),
-        OutboundEvent("tts_ready",  {
-            "audio_b64": base64.b64encode(audio).decode(),
-            "text": "네 안녕하세요",
-        }),
+        OutboundEvent("llm_chunk", {"text": "네 안녕하세요", "is_final": True}),
+        OutboundEvent(
+            "tts_ready",
+            {
+                "audio_b64": base64.b64encode(audio).decode(),
+                "text": "네 안녕하세요",
+            },
+        ),
         OutboundEvent("pipeline_done", {"latency": {"total_ms": 1234}}),
     ]
     out = _outbound_to_responses(events)
@@ -46,9 +47,9 @@ def test_mapping_filters_internal_events() -> None:
     """state_change / connected / pong / llm_chunk 는 proto 무대응 — drop."""
     events = [
         OutboundEvent("state_change", {"state": "LISTENING"}),
-        OutboundEvent("connected",    {"session_id": "abc"}),
-        OutboundEvent("pong",         {}),
-        OutboundEvent("llm_chunk",    {"text": "..."}),
+        OutboundEvent("connected", {"session_id": "abc"}),
+        OutboundEvent("pong", {}),
+        OutboundEvent("llm_chunk", {"text": "..."}),
     ]
     out = _outbound_to_responses(events)
     assert out == [], "internal events should not surface as AiResponse"
@@ -79,8 +80,7 @@ def test_mapping_error_with_pipeline_done_no_dup_eot() -> None:
 
 def test_mapping_transfer_update() -> None:
     events = [
-        OutboundEvent("transfer_update",
-                      {"reason": "CB_OPEN", "message": "상담사로 연결합니다."}),
+        OutboundEvent("transfer_update", {"reason": "CB_OPEN", "message": "상담사로 연결합니다."}),
     ]
     out = _outbound_to_responses(events)
     assert len(out) == 1
@@ -123,11 +123,13 @@ def test_metadata_default_fallback() -> None:
 
 
 def test_metadata_extracts_all() -> None:
-    ctx = _ctx_with_metadata([
-        ("x-tenant-id", "acme-corp"),
-        ("x-client-id", "client-001"),
-        ("authorization", "Bearer token-abc-123"),
-    ])
+    ctx = _ctx_with_metadata(
+        [
+            ("x-tenant-id", "acme-corp"),
+            ("x-client-id", "client-001"),
+            ("authorization", "Bearer token-abc-123"),
+        ]
+    )
     tenant, client, auth = _extract_metadata(ctx)
     assert tenant == "acme-corp"
     assert client == "client-001"

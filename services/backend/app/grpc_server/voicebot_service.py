@@ -34,12 +34,15 @@ Contract: skeleton/contracts/proto/voicebot.proto
      text_content 에 에러 메시지 + END_OF_TURN. gRPC status 는 healthy
      유지 (스트림 자체 종료 X — 다음 발화 시도 가능).
 """
+
 from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import time
-from typing import AsyncIterator, Final
+from collections.abc import AsyncIterator
+from typing import Final
 
 import grpc
 import structlog
@@ -53,9 +56,9 @@ from app.grpc_server.metrics import (
     grpc_chunk_received,
     grpc_session_end,
     grpc_session_start,
+    record_call_duration,
     record_call_setup,
     record_call_termination,
-    record_call_duration,
 )
 from app.grpc_stubs.voicebot import voicebot_pb2 as pb
 from app.grpc_stubs.voicebot import voicebot_pb2_grpc as pb_grpc
@@ -112,23 +115,27 @@ def _outbound_to_responses(events: list[OutboundEvent]) -> list[pb.AiResponse]:
         p = ev.payload
 
         if name == "stt_result":
-            out.append(pb.AiResponse(
-                type=pb.AiResponse.STT_RESULT,
-                text_content=p.get("text", ""),
-            ))
+            out.append(
+                pb.AiResponse(
+                    type=pb.AiResponse.STT_RESULT,
+                    text_content=p.get("text", ""),
+                )
+            )
 
         elif name == "tts_ready":
             audio_b64 = p.get("audio_b64", "")
             try:
                 audio_bytes = base64.b64decode(audio_b64) if audio_b64 else b""
-            except Exception:  # noqa: BLE001
+            except Exception:
                 audio_bytes = b""
                 logger.warning("tts_ready audio_b64 decode failed")
-            out.append(pb.AiResponse(
-                type=pb.AiResponse.TTS_AUDIO,
-                text_content=p.get("text", ""),
-                audio_data=audio_bytes,
-            ))
+            out.append(
+                pb.AiResponse(
+                    type=pb.AiResponse.TTS_AUDIO,
+                    text_content=p.get("text", ""),
+                    audio_data=audio_bytes,
+                )
+            )
 
         elif name == "pipeline_done":
             saw_pipeline_done = True
@@ -137,17 +144,21 @@ def _outbound_to_responses(events: list[OutboundEvent]) -> list[pb.AiResponse]:
         elif name == "error":
             saw_terminal_error = True
             msg = p.get("message", "오류가 발생했습니다.")
-            out.append(pb.AiResponse(
-                type=pb.AiResponse.STT_RESULT,
-                text_content=f"[ERROR] {msg}",
-            ))
+            out.append(
+                pb.AiResponse(
+                    type=pb.AiResponse.STT_RESULT,
+                    text_content=f"[ERROR] {msg}",
+                )
+            )
 
         elif name == "transfer_update":
             msg = p.get("message", "상담사로 연결합니다.")
-            out.append(pb.AiResponse(
-                type=pb.AiResponse.STT_RESULT,
-                text_content=f"[TRANSFER] {msg}",
-            ))
+            out.append(
+                pb.AiResponse(
+                    type=pb.AiResponse.STT_RESULT,
+                    text_content=f"[TRANSFER] {msg}",
+                )
+            )
 
         # state_change / connected / reconnected / pong / llm_chunk — skip
 
@@ -173,7 +184,7 @@ class VoicebotAiServicer(pb_grpc.VoicebotAiServiceServicer):
     def __init__(self, repo: SessionRepository) -> None:
         self._repo = repo
 
-    async def StreamSession(  # noqa: N802 (proto-defined)
+    async def StreamSession(
         self,
         request_iterator: AsyncIterator[pb.AudioChunk],
         context: grpc.aio.ServicerContext,
@@ -199,20 +210,46 @@ class VoicebotAiServicer(pb_grpc.VoicebotAiServiceServicer):
                 async for chunk in request_iterator:
                     grpc_chunk_received(tenant=tenant_id)
 
-                    # 첫 청크 — session_id 확인 + orchestrator init
+                    # 첫 청크 — session_id 확인 + lease 획득 + orchestrator init
                     if session_id is None:
                         session_id = chunk.session_id or "anonymous"
                         if not session_id:
                             terminated_reason = "server_error"
-                            await response_queue.put(pb.AiResponse(
-                                type=pb.AiResponse.STT_RESULT,
-                                text_content="[ERROR] missing session_id",
-                            ))
                             await response_queue.put(
-                                pb.AiResponse(type=pb.AiResponse.END_OF_TURN)
+                                pb.AiResponse(
+                                    type=pb.AiResponse.STT_RESULT,
+                                    text_content="[ERROR] missing session_id",
+                                )
                             )
+                            await response_queue.put(pb.AiResponse(type=pb.AiResponse.END_OF_TURN))
                             return
-                        orchestrator, initial = await restore_or_create_orchestrator(
+
+                        # ── Lease Lock 획득 ──────────────────────────────
+                        # 동일 session_id 중복 연결 방지.
+                        print(
+                            f"DEBUG: Attempting to acquire lease for {session_id} (tenant={tenant_id})"
+                        )
+                        if not await self._repo.acquire_session_lease(
+                            session_id, tenant_id=tenant_id
+                        ):
+                            print(f"DEBUG: Lease acquisition FAILED for {session_id}")
+                            terminated_reason = "lease_conflict"
+                            logger.warning(
+                                "Duplicate session rejected (lease lock)", session_id=session_id
+                            )
+                            await response_queue.put(
+                                pb.AiResponse(
+                                    type=pb.AiResponse.STT_RESULT,
+                                    text_content="[ERROR] session already in progress (lease lock)",
+                                )
+                            )
+                            await response_queue.put(pb.AiResponse(type=pb.AiResponse.END_OF_TURN))
+                            # session_id를 None으로 되돌려 finally에서 해제되지 않게 함
+                            # (원래 잡고 있는 쪽이 해제해야 하므로)
+                            session_id = None
+                            return
+
+                        orchestrator, _initial = await restore_or_create_orchestrator(
                             session_id=session_id,
                             tenant_id=tenant_id,
                             client_id=client_id,
@@ -221,13 +258,13 @@ class VoicebotAiServicer(pb_grpc.VoicebotAiServiceServicer):
                         )
                         if orchestrator is None:
                             terminated_reason = "server_error"
-                            await response_queue.put(pb.AiResponse(
-                                type=pb.AiResponse.STT_RESULT,
-                                text_content="[ERROR] session ended",
-                            ))
                             await response_queue.put(
-                                pb.AiResponse(type=pb.AiResponse.END_OF_TURN)
+                                pb.AiResponse(
+                                    type=pb.AiResponse.STT_RESULT,
+                                    text_content="[ERROR] session ended",
+                                )
                             )
+                            await response_queue.put(pb.AiResponse(type=pb.AiResponse.END_OF_TURN))
                             return
 
                         record_call_setup(result="ok")
@@ -235,9 +272,7 @@ class VoicebotAiServicer(pb_grpc.VoicebotAiServiceServicer):
                         inc_active_sessions(tenant_id)
                         # initial event (connected/reconnected) 는 proto 무대응 — drop.
                         # listening 시작 control 자동 송신
-                        await emit(await orchestrator.handle_control(
-                            {"action": "start_listening"}
-                        ))
+                        await emit(await orchestrator.handle_control({"action": "start_listening"}))
 
                     assert orchestrator is not None
                     assert session_id is not None
@@ -245,10 +280,14 @@ class VoicebotAiServicer(pb_grpc.VoicebotAiServiceServicer):
                     # ── DTMF ───────────────────────────────────────────────
                     if chunk.dtmf_digit:
                         # v0: control message 만 기록. IVR 라우팅은 후속 phase.
-                        await emit(await orchestrator.handle_control({
-                            "action": "dtmf",
-                            "digit": chunk.dtmf_digit,
-                        }))
+                        await emit(
+                            await orchestrator.handle_control(
+                                {
+                                    "action": "dtmf",
+                                    "digit": chunk.dtmf_digit,
+                                }
+                            )
+                        )
                         continue
 
                     # ── 음성 frame ─────────────────────────────────────────
@@ -257,25 +296,21 @@ class VoicebotAiServicer(pb_grpc.VoicebotAiServiceServicer):
                     # Barge-in 감지: 이전엔 silence, 지금 발화 시작.
                     # bridge 출력 버퍼 즉시 비우라고 알림.
                     if is_speaking and not last_speaking:
-                        await response_queue.put(pb.AiResponse(
-                            type=pb.AiResponse.TTS_AUDIO,
-                            clear_buffer=True,
-                        ))
+                        await response_queue.put(
+                            pb.AiResponse(
+                                type=pb.AiResponse.TTS_AUDIO,
+                                clear_buffer=True,
+                            )
+                        )
 
                     # 발화 끝 감지: 이전엔 발화, 지금 silence — flush 트리거.
                     if (not is_speaking) and last_speaking:
-                        await emit(await orchestrator.handle_control(
-                            {"action": "stop_listening"}
-                        ))
+                        await emit(await orchestrator.handle_control({"action": "stop_listening"}))
                         # 다음 발화 위해 다시 listening 켬
-                        await emit(await orchestrator.handle_control(
-                            {"action": "start_listening"}
-                        ))
+                        await emit(await orchestrator.handle_control({"action": "start_listening"}))
                     elif chunk.audio_data:
                         # buffer 누적 — 임계 도달 시 자동 pipeline 호출됨
-                        await emit(await orchestrator.handle_audio(
-                            chunk.audio_data
-                        ))
+                        await emit(await orchestrator.handle_audio(chunk.audio_data))
 
                     last_speaking = is_speaking
 
@@ -284,17 +319,18 @@ class VoicebotAiServicer(pb_grpc.VoicebotAiServiceServicer):
             except asyncio.CancelledError:
                 terminated_reason = "client_hangup"
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 terminated_reason = "server_error"
-                logger.exception("StreamSession reader error",
-                                 session_id=session_id, error=str(exc))
-                await response_queue.put(pb.AiResponse(
-                    type=pb.AiResponse.STT_RESULT,
-                    text_content=f"[ERROR] internal: {exc}",
-                ))
-                await response_queue.put(
-                    pb.AiResponse(type=pb.AiResponse.END_OF_TURN)
+                logger.exception(
+                    "StreamSession reader error", session_id=session_id, error=str(exc)
                 )
+                await response_queue.put(
+                    pb.AiResponse(
+                        type=pb.AiResponse.STT_RESULT,
+                        text_content=f"[ERROR] internal: {exc}",
+                    )
+                )
+                await response_queue.put(pb.AiResponse(type=pb.AiResponse.END_OF_TURN))
             finally:
                 # sentinel — writer 가 종료 알 수 있게
                 await response_queue.put(None)
@@ -310,27 +346,31 @@ class VoicebotAiServicer(pb_grpc.VoicebotAiServiceServicer):
         finally:
             # cleanup
             reader_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await reader_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
-            # FSM end + 메트릭
-            if orchestrator is not None and session_id:
+            # ── Lease Lock 해제 + FSM end + 메트릭 ──────────────────────
+            if session_id:
                 try:
-                    end_events = await orchestrator.end_session(
-                        reason=terminated_reason
+                    await self._repo.release_session_lease(session_id, tenant_id=tenant_id)
+                except Exception as exc:
+                    logger.warning(
+                        "release_session_lease failed", session_id=session_id, error=str(exc)
                     )
-                    # end_session 의 이벤트는 굳이 클라에 보낼 필요 없음 (이미 stream 닫힘)
-                    _ = end_events
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("end_session failed",
-                                   session_id=session_id, error=str(exc))
+
+                if orchestrator is not None:
+                    try:
+                        end_events = await orchestrator.end_session(reason=terminated_reason)
+                        # end_session 의 이벤트는 굳이 클라에 보낼 필요 없음 (이미 stream 닫힘)
+                        _ = end_events
+                    except Exception as exc:
+                        logger.warning("end_session failed", session_id=session_id, error=str(exc))
+
                 dec_active_sessions(tenant_id)
                 grpc_session_end(tenant=tenant_id, reason=terminated_reason)
                 record_call_termination(reason=terminated_reason)
                 record_call_duration(time.monotonic() - stream_start)
 
             if session_id is None:
-                # 시작 전 실패
+                # 시작 전 실패 (lease_conflict 등)
                 record_call_setup(result="fail")

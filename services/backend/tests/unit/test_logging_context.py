@@ -6,6 +6,7 @@
   2. unbind_request_context 는 전체를 비운다.
   3. 예외가 발생해도 scoped_context 는 반드시 unbind 한다.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -53,9 +54,8 @@ def test_scoped_context_preserves_outer_scope() -> None:
 
 def test_scoped_context_on_exception() -> None:
     bind_session_context(session_id="outer")
-    with pytest.raises(RuntimeError):
-        with scoped_context(pipeline_stage="llm"):
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), scoped_context(pipeline_stage="llm"):
+        raise RuntimeError("boom")
     # 예외 경로에서도 반드시 unbind
     ctx = _current_ctx()
     assert "pipeline_stage" not in ctx

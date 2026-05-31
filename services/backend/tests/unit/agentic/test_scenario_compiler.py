@@ -9,6 +9,7 @@ langgraph 설치된 환경에서는:
   - BranchNode 는 add_conditional_edges 경로
   - WaitNode 는 wait_node_ids 에 수집됨 (interrupt_before 용)
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -20,7 +21,7 @@ from app.agentic.scenario_compiler import (
     _dry_run_compile,
     compile_scenario,
 )
-from app.agentic.scenario_dsl import BranchNode, WaitNode
+from app.agentic.scenario_dsl import BranchNode
 from tests.unit.agentic.conftest import (
     branch_scenario,
     full_scenario_with_all_node_types,

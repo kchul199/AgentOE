@@ -1,0 +1,51 @@
+# ── ops-portal prod values (Phase N — N5.3) ───────────────────────────────
+# N5.3: replicaCount=3, cpu 500m, SSE_MAX_CONNECTIONS_PER_POD=200
+image:
+  repository: REPLACE_ECR/agentoe-prod/ops-portal
+  tag: ""          # CI 가 IMAGE_TAG 로 override
+  pullPolicy: Always
+
+# 3 pods = ALB에 최소 2개 Always Running + 1 surge 가능
+replicaCount: 3
+
+backendUpstream: "http://agentoe-backend.default.svc.cluster.local"
+
+ingress:
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/group.name: agentoe-internal-prod
+    alb.ingress.kubernetes.io/certificate-arn: "REPLACE_ACM_CERT_ARN_PROD"
+    alb.ingress.kubernetes.io/load-balancer-attributes: >-
+      idle_timeout.timeout_seconds=3600
+  hosts:
+    - host: portal.agentoe.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+  # HPA 기준: SSE 연결 수 기반 (CPU 는 SSE 특성상 부정확)
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 128Mi
+  limits:
+    cpu: 500m       # plan N5.3 목표
+    memory: 256Mi
+
+# SSE connection guard — pod 당 200 (CLAUDE.md: prod=200)
+env:
+  SSE_MAX_CONNECTIONS_PER_POD: "200"
+  UVICORN_LIMIT_CONCURRENCY: "500"
+
+environment: "production"
+
+# PodDisruptionBudget — rolling update 시 최소 2개 유지
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2

@@ -41,25 +41,28 @@ P50/P95/P99 계산:
   - 슬라이딩 윈도우 방식: 최근 1000개 샘플 유지 (Percentile은 윈도우 기반)
   - avg/count/sum은 서비스 시작 이후 전체 누적값
 """
+
 from __future__ import annotations
 
 import math
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from datetime import UTC
 from threading import Lock
 from typing import Any
 
 # ── Prometheus client 선택적 임포트 ───────────────────────────────────────────
 try:
     from prometheus_client import (
+        CONTENT_TYPE_LATEST,
         REGISTRY,
         Counter,
         Gauge,
         Histogram,
         generate_latest,
-        CONTENT_TYPE_LATEST,
     )
+
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
     _PROMETHEUS_AVAILABLE = False
@@ -75,6 +78,7 @@ WINDOW_SIZE = 1000
 
 
 # ── in-process 히스토그램 구현 ─────────────────────────────────────────────────
+
 
 class _SlidingHistogram:
     """
@@ -113,8 +117,11 @@ class _SlidingHistogram:
         with self._lock:
             if not self._samples:
                 return {
-                    "p50": 0.0, "p95": 0.0, "p99": 0.0,
-                    "avg": 0.0, "max": 0.0,
+                    "p50": 0.0,
+                    "p95": 0.0,
+                    "p99": 0.0,
+                    "avg": 0.0,
+                    "max": 0.0,
                     "count": self._count_total,
                     "sum": self._sum_total,
                 }
@@ -176,6 +183,7 @@ class _Gauge:
 
 # ── in-process 메트릭 저장소 ──────────────────────────────────────────────────
 
+
 @dataclass
 class _MetricsStore:
     """
@@ -188,21 +196,13 @@ class _MetricsStore:
     pipeline_calls: defaultdict[str, _Counter] = field(
         default_factory=lambda: defaultdict(_Counter)
     )
-    stt_calls: defaultdict[str, _Counter] = field(
-        default_factory=lambda: defaultdict(_Counter)
-    )
-    llm_calls: defaultdict[str, _Counter] = field(
-        default_factory=lambda: defaultdict(_Counter)
-    )
-    tts_calls: defaultdict[str, _Counter] = field(
-        default_factory=lambda: defaultdict(_Counter)
-    )
+    stt_calls: defaultdict[str, _Counter] = field(default_factory=lambda: defaultdict(_Counter))
+    llm_calls: defaultdict[str, _Counter] = field(default_factory=lambda: defaultdict(_Counter))
+    tts_calls: defaultdict[str, _Counter] = field(default_factory=lambda: defaultdict(_Counter))
     transfer_requests: defaultdict[str, _Counter] = field(
         default_factory=lambda: defaultdict(_Counter)
     )
-    policy_blocks: defaultdict[str, _Counter] = field(
-        default_factory=lambda: defaultdict(_Counter)
-    )
+    policy_blocks: defaultdict[str, _Counter] = field(default_factory=lambda: defaultdict(_Counter))
     # Track 3: LLM quota / token / cost
     # label = f"{tenant}:{scope}:{result}" — scope ∈ {tokens, cost, none}
     #                                        result ∈ {ok, warn, fallback, reject}
@@ -217,9 +217,7 @@ class _MetricsStore:
         default_factory=lambda: defaultdict(_Counter)
     )
     # Track 3: JWKS cache lookups — label = result ∈ {hit, miss, force_refresh, fail}
-    jwks_lookups: defaultdict[str, _Counter] = field(
-        default_factory=lambda: defaultdict(_Counter)
-    )
+    jwks_lookups: defaultdict[str, _Counter] = field(default_factory=lambda: defaultdict(_Counter))
 
     # Histograms (tenant_id → _SlidingHistogram)
     pipeline_latency: defaultdict[str, _SlidingHistogram] = field(
@@ -240,9 +238,7 @@ class _MetricsStore:
     )
 
     # Gauges
-    active_sessions: defaultdict[str, _Gauge] = field(
-        default_factory=lambda: defaultdict(_Gauge)
-    )
+    active_sessions: defaultdict[str, _Gauge] = field(default_factory=lambda: defaultdict(_Gauge))
     circuit_breaker_state: defaultdict[str, _Gauge] = field(
         default_factory=lambda: defaultdict(_Gauge)
     )
@@ -252,9 +248,7 @@ class _MetricsStore:
         default_factory=lambda: defaultdict(_Gauge)
     )
     # label = f"{tenant}:{kind}" — kind ∈ {audio, event, full}
-    ws_drops: defaultdict[str, _Counter] = field(
-        default_factory=lambda: defaultdict(_Counter)
-    )
+    ws_drops: defaultdict[str, _Counter] = field(default_factory=lambda: defaultdict(_Counter))
 
 
 # ── Prometheus 네이티브 메트릭 객체 ───────────────────────────────────────────
@@ -265,6 +259,7 @@ class _MetricsStore:
 _prom: Any = None  # _PrometheusMetrics | None
 
 if _PROMETHEUS_AVAILABLE:
+
     class _PrometheusMetrics:
         """
         Prometheus 네이티브 메트릭 객체 묶음.
@@ -275,6 +270,7 @@ if _PROMETHEUS_AVAILABLE:
           histogram_quantile(0.95, sum(rate(agentoe_pipeline_latency_ms_bucket[5m])) by (le, tenant))
           sum(agentoe_active_sessions) by (tenant)
         """
+
         def __init__(self) -> None:
             self.pipeline_calls = Counter(
                 "agentoe_pipeline_calls_total",
@@ -391,6 +387,7 @@ _store = _MetricsStore()
 # 모든 함수는 _store에 기록합니다 (JSON API용).
 # _prom이 존재하면 동시에 Prometheus 네이티브 객체에도 기록합니다 (/metrics 스크랩용).
 
+
 def record_pipeline_call(
     tenant_id: str,
     success: bool,
@@ -466,6 +463,7 @@ def record_policy_block(tenant_id: str, level: str) -> None:
 
 # ── Session Gauge ─────────────────────────────────────────────────────────────
 
+
 def inc_active_sessions(tenant_id: str) -> None:
     _store.active_sessions[tenant_id].inc()
     if _prom:
@@ -512,7 +510,9 @@ def record_quota_check(tenant_id: str, scope: str, result: str) -> None:
     _store.llm_quota_checks[f"{tenant_id}:{scope}:{result}"].inc()
     if _prom:
         _prom.llm_quota_checks.labels(
-            tenant=tenant_id, scope=scope, result=result,
+            tenant=tenant_id,
+            scope=scope,
+            result=result,
         ).inc()
 
 
@@ -538,11 +538,13 @@ def record_llm_usage(
     if _prom:
         if tokens > 0:
             _prom.llm_tokens_consumed.labels(
-                tenant=tenant_id, model=model,
+                tenant=tenant_id,
+                model=model,
             ).inc(float(tokens))
         if cost_cents > 0:
             _prom.llm_cost_cents.labels(
-                tenant=tenant_id, model=model,
+                tenant=tenant_id,
+                model=model,
             ).inc(float(cost_cents))
 
 
@@ -625,18 +627,19 @@ def record_ws_drop(tenant_id: str, kind: str) -> None:
 
 # ── 조회 API (항상 in-process _store 기반) ────────────────────────────────────
 
+
 def get_pipeline_stats(tenant_id: str | None = None) -> dict[str, Any]:
     """tenant_id 지정 시 해당 테넌트 통계, None이면 전체 합산."""
     tenants = (
-        [tenant_id] if tenant_id
-        else list({k.split(":")[0] for k in _store.pipeline_calls})
-        or ["_global"]
+        [tenant_id]
+        if tenant_id
+        else list({k.split(":")[0] for k in _store.pipeline_calls}) or ["_global"]
     )
 
     result: dict[str, Any] = {}
     for t in tenants:
         calls_success = _store.pipeline_calls[f"{t}:success"].get()
-        calls_error   = _store.pipeline_calls[f"{t}:error"].get()
+        calls_error = _store.pipeline_calls[f"{t}:error"].get()
         calls_degraded = _store.pipeline_calls[f"{t}:degraded"].get()
         total = calls_success + calls_error + calls_degraded
         result[t] = {
@@ -648,9 +651,9 @@ def get_pipeline_stats(tenant_id: str | None = None) -> dict[str, Any]:
             },
             "error_rate": round(calls_error / max(total, 1), 4),
             "pipeline_latency_ms": _store.pipeline_latency[t].stats(),
-            "stt_latency_ms":      _store.stt_latency[t].stats(),
-            "llm_latency_ms":      _store.llm_latency[t].stats(),
-            "tts_latency_ms":      _store.tts_latency[t].stats(),
+            "stt_latency_ms": _store.stt_latency[t].stats(),
+            "llm_latency_ms": _store.llm_latency[t].stats(),
+            "tts_latency_ms": _store.tts_latency[t].stats(),
         }
     return result
 
@@ -676,6 +679,7 @@ def get_circuit_breaker_gauges() -> dict[str, float]:
 def get_all_metrics(tenant_id: str | None = None) -> dict[str, Any]:
     """모든 메트릭 통합 반환 (JSON API 응답용)."""
     from app.domain.circuit_breaker import get_all_statuses
+
     cb_statuses = get_all_statuses()
 
     # CB 상태를 게이지로 동기화 (_store + _prom 이중 기록)
@@ -701,7 +705,208 @@ def get_all_metrics(tenant_id: str | None = None) -> dict[str, Any]:
     }
 
 
+# ── 운영포탈 KPI 스냅샷 (Phase N — N2.1 / N3.2) ─────────────────────────────
+
+
+def get_metrics_snapshot() -> dict[str, Any]:
+    """Dashboard SSE `/stream/metrics` 용 KPI 스냅샷 — in-process _store 동기 버전.
+
+    Prometheus HTTP API 가 없는 환경 (로컬 개발, unit test) 또는
+    `get_metrics_snapshot_async()` 의 fallback 으로 사용.
+
+    반환 필드:
+        ts              — ISO 8601 UTC
+        ccu             — 전체 active sessions 합산
+        p95_ms          — 전체 pipeline P95 latency (ms)
+        p99_ms          — 전체 pipeline P99 latency (ms)
+        error_rate_pct  — 전체 error rate %  (소수점 2자리)
+        slo_achieved_pct — error_rate 기준 SLO 달성 여부 (99% 목표)
+        stt_p95_ms      — STT P95
+        llm_p95_ms      — LLM P95
+        tts_p95_ms      — TTS P95
+        total_calls_today — 프로세스 기동 이후 합산 calls
+        failed_calls_today — 프로세스 기동 이후 error calls
+        active_tenants  — active session 가진 테넌트 수
+    """
+    from datetime import datetime
+
+    ccu = sum(g.get() for g in _store.active_sessions.values())
+
+    all_tenants = list({k.split(":")[0] for k in _store.pipeline_calls}) or ["_global"]
+    total_calls: float = 0.0
+    error_calls: float = 0.0
+    p95_vals: list[float] = []
+    p99_vals: list[float] = []
+    stt_p95_vals: list[float] = []
+    llm_p95_vals: list[float] = []
+    tts_p95_vals: list[float] = []
+
+    for t in all_tenants:
+        s = _store.pipeline_calls[f"{t}:success"].get()
+        e = _store.pipeline_calls[f"{t}:error"].get()
+        d = _store.pipeline_calls[f"{t}:degraded"].get()
+        total_calls += s + e + d
+        error_calls += e
+
+        pl = _store.pipeline_latency[t].stats()
+        if pl.get("p95") is not None:
+            p95_vals.append(pl["p95"])
+        if pl.get("p99") is not None:
+            p99_vals.append(pl["p99"])
+
+        stt = _store.stt_latency[t].stats()
+        if stt.get("p95") is not None:
+            stt_p95_vals.append(stt["p95"])
+        llm = _store.llm_latency[t].stats()
+        if llm.get("p95") is not None:
+            llm_p95_vals.append(llm["p95"])
+        tts = _store.tts_latency[t].stats()
+        if tts.get("p95") is not None:
+            tts_p95_vals.append(tts["p95"])
+
+    p95_ms = round(max(p95_vals) if p95_vals else 0.0, 1)
+    p99_ms = round(max(p99_vals) if p99_vals else 0.0, 1)
+    error_rate = round((error_calls / max(total_calls, 1)) * 100, 2)
+    slo_pct = round(max(0.0, 100.0 - error_rate), 2)
+
+    return {
+        "ts": datetime.now(UTC).isoformat(),
+        "ccu": int(ccu),
+        "p95_ms": p95_ms,
+        "p99_ms": p99_ms,
+        "error_rate_pct": error_rate,
+        "slo_achieved_pct": slo_pct,
+        "stt_p95_ms": round(max(stt_p95_vals) if stt_p95_vals else 0.0, 1),
+        "llm_p95_ms": round(max(llm_p95_vals) if llm_p95_vals else 0.0, 1),
+        "tts_p95_ms": round(max(tts_p95_vals) if tts_p95_vals else 0.0, 1),
+        "total_calls_today": int(total_calls),
+        "failed_calls_today": int(error_calls),
+        "active_tenants": sum(1 for g in _store.active_sessions.values() if g.get() > 0),
+    }
+
+
+async def get_metrics_snapshot_async() -> dict[str, Any]:
+    """Dashboard SSE KPI 스냅샷 — Prometheus HTTP API 우선, 실패 시 in-process fallback.
+
+    Phase N3.2: PrometheusClient 실 PromQL 쿼리 연동.
+      - 10개 지표를 asyncio.gather 로 병렬 조회 (전체 timeout 2s).
+      - Prometheus 미연결 / 데이터 없음 → in-process get_metrics_snapshot() fallback.
+      - N1.12 CLAUDE.md 규칙 준수: executor 없이 async 직접 호출.
+
+    PromQL 쿼리 목록:
+      ccu           — sum(agentoe_active_sessions)
+      p95_ms        — histogram_quantile(0.95, sum(rate(...bucket[5m])) by (le))
+      p99_ms        — histogram_quantile(0.99, ...)
+      error_rate    — sum(rate(error[5m])) / sum(rate(total[5m])) * 100
+      stt/llm/tts   — 각 컴포넌트 P95
+      total_calls   — sum(agentoe_pipeline_calls_total) [Counter — 누적]
+      error_calls   — sum(agentoe_pipeline_calls_total{status="error"})
+      active_tenants — count(sum(...) by (tenant) > 0)
+    """
+    import asyncio
+
+    import structlog
+
+    logger = structlog.get_logger(__name__)
+
+    try:
+        from app.infra.prometheus_client import get_prometheus_client
+
+        client = await asyncio.wait_for(get_prometheus_client(), timeout=1.0)
+
+        # 10개 PromQL 병렬 조회 — 개별 실패는 scalar_or_default(0.0) 로 흡수
+        (
+            ccu,
+            p95_ms,
+            p99_ms,
+            error_rate_raw,
+            stt_p95,
+            llm_p95,
+            tts_p95,
+            total_calls,
+            error_calls,
+            active_tenants,
+        ) = await asyncio.wait_for(
+            asyncio.gather(
+                client.scalar_or_default("sum(agentoe_active_sessions)", 0.0),
+                client.scalar_or_default(
+                    "histogram_quantile(0.95,"
+                    " sum(rate(agentoe_pipeline_latency_ms_bucket[5m])) by (le))",
+                    0.0,
+                ),
+                client.scalar_or_default(
+                    "histogram_quantile(0.99,"
+                    " sum(rate(agentoe_pipeline_latency_ms_bucket[5m])) by (le))",
+                    0.0,
+                ),
+                client.scalar_or_default(
+                    "sum(rate(agentoe_pipeline_calls_total{status='error'}[5m]))"
+                    " / (sum(rate(agentoe_pipeline_calls_total[5m])) > 0) * 100"
+                    " or vector(0)",
+                    0.0,
+                ),
+                client.scalar_or_default(
+                    "histogram_quantile(0.95,"
+                    " sum(rate(agentoe_stt_latency_ms_bucket[5m])) by (le))",
+                    0.0,
+                ),
+                client.scalar_or_default(
+                    "histogram_quantile(0.95,"
+                    " sum(rate(agentoe_llm_latency_ms_bucket[5m])) by (le))",
+                    0.0,
+                ),
+                client.scalar_or_default(
+                    "histogram_quantile(0.95,"
+                    " sum(rate(agentoe_tts_latency_ms_bucket[5m])) by (le))",
+                    0.0,
+                ),
+                client.scalar_or_default("sum(agentoe_pipeline_calls_total)", 0.0),
+                client.scalar_or_default("sum(agentoe_pipeline_calls_total{status='error'})", 0.0),
+                client.scalar_or_default(
+                    "count(sum(agentoe_active_sessions) by (tenant) > 0) or vector(0)",
+                    0.0,
+                ),
+            ),
+            timeout=2.0,
+        )
+
+        # 전부 0 → Prometheus 에 아직 데이터 없음 (scrape 전) → fallback
+        if ccu == 0.0 and p95_ms == 0.0 and total_calls == 0.0:
+            logger.debug("prometheus_snapshot_all_zeros_fallback")
+            return get_metrics_snapshot()
+
+        from datetime import datetime
+
+        error_rate_pct = round(max(0.0, float(error_rate_raw)), 2)
+        slo_pct = round(max(0.0, 100.0 - error_rate_pct), 2)
+
+        logger.debug("prometheus_snapshot_ok", ccu=int(ccu), p95_ms=round(float(p95_ms), 1))
+
+        return {
+            "ts": datetime.now(UTC).isoformat(),
+            "ccu": int(ccu),
+            "p95_ms": round(float(p95_ms), 1),
+            "p99_ms": round(float(p99_ms), 1),
+            "error_rate_pct": error_rate_pct,
+            "slo_achieved_pct": slo_pct,
+            "stt_p95_ms": round(float(stt_p95), 1),
+            "llm_p95_ms": round(float(llm_p95), 1),
+            "tts_p95_ms": round(float(tts_p95), 1),
+            "total_calls_today": int(total_calls),
+            "failed_calls_today": int(error_calls),
+            "active_tenants": int(active_tenants),
+        }
+
+    except Exception as exc:
+        logger.debug(
+            "prometheus_snapshot_fallback",
+            reason=str(exc),
+        )
+        return get_metrics_snapshot()
+
+
 # ── Prometheus 텍스트 포맷 출력 ───────────────────────────────────────────────
+
 
 def generate_prometheus_metrics() -> tuple[str, str]:
     """
@@ -733,11 +938,13 @@ def generate_prometheus_metrics() -> tuple[str, str]:
     lines.append("# TYPE agentoe_pipeline_calls_total counter")
     for label, ctr in _store.pipeline_calls.items():
         tenant, status = label.split(":", 1)
-        lines.append(_counter_line(
-            "agentoe_pipeline_calls_total",
-            {"tenant": tenant, "status": status},
-            ctr.get(),
-        ))
+        lines.append(
+            _counter_line(
+                "agentoe_pipeline_calls_total",
+                {"tenant": tenant, "status": status},
+                ctr.get(),
+            )
+        )
 
     # pipeline latency summary (P50/P95/P99)
     lines.append("# HELP agentoe_pipeline_latency_ms Pipeline latency in milliseconds")
@@ -745,11 +952,13 @@ def generate_prometheus_metrics() -> tuple[str, str]:
     for tenant, hist in _store.pipeline_latency.items():
         s = hist.stats()
         for q, val in [("0.5", s["p50"]), ("0.95", s["p95"]), ("0.99", s["p99"])]:
-            lines.append(_counter_line(
-                "agentoe_pipeline_latency_ms",
-                {"tenant": tenant, "quantile": q},
-                val,
-            ))
+            lines.append(
+                _counter_line(
+                    "agentoe_pipeline_latency_ms",
+                    {"tenant": tenant, "quantile": q},
+                    val,
+                )
+            )
         lines.append(f'agentoe_pipeline_latency_ms_count{{tenant="{tenant}"}} {s["count"]}')
         lines.append(f'agentoe_pipeline_latency_ms_sum{{tenant="{tenant}"}} {s["sum"]:.2f}')
 
@@ -773,70 +982,76 @@ def generate_prometheus_metrics() -> tuple[str, str]:
         if len(parts) != 3:
             continue
         tenant, scope, result = parts
-        lines.append(_counter_line(
-            "agentoe_llm_quota_checks_total",
-            {"tenant": tenant, "scope": scope, "result": result},
-            ctr.get(),
-        ))
+        lines.append(
+            _counter_line(
+                "agentoe_llm_quota_checks_total",
+                {"tenant": tenant, "scope": scope, "result": result},
+                ctr.get(),
+            )
+        )
 
     # LLM tokens consumed
     lines.append("# HELP agentoe_llm_tokens_consumed_total Total LLM tokens consumed")
     lines.append("# TYPE agentoe_llm_tokens_consumed_total counter")
     for label, ctr in _store.llm_tokens_consumed.items():
         tenant, model = label.split(":", 1)
-        lines.append(_counter_line(
-            "agentoe_llm_tokens_consumed_total",
-            {"tenant": tenant, "model": model},
-            ctr.get(),
-        ))
+        lines.append(
+            _counter_line(
+                "agentoe_llm_tokens_consumed_total",
+                {"tenant": tenant, "model": model},
+                ctr.get(),
+            )
+        )
 
     # LLM cost cents
     lines.append("# HELP agentoe_llm_cost_cents_total Total LLM cost in cents")
     lines.append("# TYPE agentoe_llm_cost_cents_total counter")
     for label, ctr in _store.llm_cost_cents.items():
         tenant, model = label.split(":", 1)
-        lines.append(_counter_line(
-            "agentoe_llm_cost_cents_total",
-            {"tenant": tenant, "model": model},
-            ctr.get(),
-        ))
+        lines.append(
+            _counter_line(
+                "agentoe_llm_cost_cents_total",
+                {"tenant": tenant, "model": model},
+                ctr.get(),
+            )
+        )
 
     # ── Track 3: JWKS cache + refresh ─────────────────────────────────────
     lines.append("# HELP agentoe_jwks_lookups_total JWKS cache lookups by outcome")
     lines.append("# TYPE agentoe_jwks_lookups_total counter")
     for result, ctr in _store.jwks_lookups.items():
-        lines.append(_counter_line(
-            "agentoe_jwks_lookups_total",
-            {"result": result},
-            ctr.get(),
-        ))
+        lines.append(
+            _counter_line(
+                "agentoe_jwks_lookups_total",
+                {"result": result},
+                ctr.get(),
+            )
+        )
 
     lines.append("# HELP agentoe_jwks_refresh_duration_seconds JWKS refresh duration")
     lines.append("# TYPE agentoe_jwks_refresh_duration_seconds summary")
     for result, hist in _store.jwks_refresh_duration_s.items():
         s = hist.stats()
         for q, val in [("0.5", s["p50"]), ("0.95", s["p95"]), ("0.99", s["p99"])]:
-            lines.append(_counter_line(
-                "agentoe_jwks_refresh_duration_seconds",
-                {"result": result, "quantile": q},
-                val,
-            ))
+            lines.append(
+                _counter_line(
+                    "agentoe_jwks_refresh_duration_seconds",
+                    {"result": result, "quantile": q},
+                    val,
+                )
+            )
         lines.append(
-            f'agentoe_jwks_refresh_duration_seconds_count{{result="{result}"}} '
-            f'{s["count"]}'
+            f'agentoe_jwks_refresh_duration_seconds_count{{result="{result}"}} {s["count"]}'
         )
         lines.append(
-            f'agentoe_jwks_refresh_duration_seconds_sum{{result="{result}"}} '
-            f'{s["sum"]:.4f}'
+            f'agentoe_jwks_refresh_duration_seconds_sum{{result="{result}"}} {s["sum"]:.4f}'
         )
 
     # ── Track 2 P2: WS back-pressure ──────────────────────────────────────
     lines.append("# HELP agentoe_ws_send_queue_depth WS send queue depth (this Pod)")
     lines.append("# TYPE agentoe_ws_send_queue_depth gauge")
     for tenant, gauge in _store.ws_send_queue_depth.items():
-        lines.append(
-            f'agentoe_ws_send_queue_depth{{tenant="{tenant}"}} {gauge.get()}'
-        )
+        lines.append(f'agentoe_ws_send_queue_depth{{tenant="{tenant}"}} {gauge.get()}')
 
     lines.append("# HELP agentoe_ws_drops_total WS outbound drops by kind")
     lines.append("# TYPE agentoe_ws_drops_total counter")
@@ -845,10 +1060,12 @@ def generate_prometheus_metrics() -> tuple[str, str]:
         if len(parts) != 2:
             continue
         tenant, kind = parts
-        lines.append(_counter_line(
-            "agentoe_ws_drops_total",
-            {"tenant": tenant, "kind": kind},
-            ctr.get(),
-        ))
+        lines.append(
+            _counter_line(
+                "agentoe_ws_drops_total",
+                {"tenant": tenant, "kind": kind},
+                ctr.get(),
+            )
+        )
 
     return "\n".join(lines) + "\n", "text/plain; version=0.0.4; charset=utf-8"

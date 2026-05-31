@@ -1,5 +1,7 @@
 """Unit tests for Session FSM."""
+
 import pytest
+
 from app.domain.session_fsm import SessionFSM, SessionState
 
 

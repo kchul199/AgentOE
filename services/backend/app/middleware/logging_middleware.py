@@ -12,16 +12,16 @@ Logging Middleware — 요청별 context var 자동 주입 + 접근 로그
   - JWT 디코딩: 서명 검증 없이 페이로드만 추출 (인증은 auth.py에서 수행)
   - Redis/DB 조회 없음 — 순수 in-memory 처리
 """
+
 from __future__ import annotations
 
 import base64
 import json
-import logging
 import time
 import uuid
 
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
@@ -55,7 +55,7 @@ def _extract_tenant_from_jwt(authorization: str | None) -> tuple[str | None, str
         payload_b64 = parts[1] + "=="  # padding 보정
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
         return payload.get("tenant_id"), payload.get("sub")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None, None
 
 
@@ -75,7 +75,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # WebSocket 업그레이드 요청은 통과 (WS 자체에서 처리)
         if request.url.path.startswith(_WS_PREFIX):
             return await call_next(request)
@@ -86,9 +86,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())[:8]
 
         # 2. Tenant / Client ID
-        tenant_id, client_id = _extract_tenant_from_jwt(
-            request.headers.get("Authorization")
-        )
+        tenant_id, client_id = _extract_tenant_from_jwt(request.headers.get("Authorization"))
 
         # 3. Context var 바인딩
         bind_request_context(
@@ -119,6 +117,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             # 5. 접근 로그 (bound context 가 아직 살아있는 상태에서 기록)
             elapsed_ms = (time.monotonic() - start_time) * 1000
             if request.url.path not in _SKIP_ACCESS_LOG:
+                assert response is not None  # call_next는 항상 Response 반환
                 log_fn = logger.warning if response.status_code >= 400 else logger.info
                 log_fn(
                     "HTTP request completed",

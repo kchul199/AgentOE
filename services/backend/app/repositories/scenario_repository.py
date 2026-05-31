@@ -15,9 +15,10 @@ Index 설계 (mongo/init-tenants.js 에서 생성):
     { tenant_id: 1, scenario_id: 1, published: 1 } — published=True 단일 행 조회
     { tenant_id: 1, updated_at: -1 }               — 테넌트별 최근 목록
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.database import get_database
@@ -42,17 +43,21 @@ class ScenarioConflictError(AgentOEBaseError):
 class ScenarioRepository:
     """비동기 MongoDB repository (motor)."""
 
-    def __init__(self, db=None) -> None:
+    def __init__(self, db: Any = None) -> None:
         self._db = db
 
     @property
-    def col(self):
+    def col(self) -> Any:
         return (self._db or get_database())["scenarios"]
 
     # ── 조회 ─────────────────────────────────────────────────────────
 
     async def list_by_tenant(
-        self, tenant_id: str, *, include_drafts: bool = True, limit: int = 200,
+        self,
+        tenant_id: str,
+        *,
+        include_drafts: bool = True,
+        limit: int = 200,
     ) -> list[dict[str, Any]]:
         """테넌트의 시나리오 최신 버전만 요약 목록으로 반환."""
         pipeline: list[dict[str, Any]] = [
@@ -85,7 +90,10 @@ class ScenarioRepository:
         return await cursor.to_list(length=limit)
 
     async def get_version(
-        self, tenant_id: str, scenario_id: str, version: int,
+        self,
+        tenant_id: str,
+        scenario_id: str,
+        version: int,
     ) -> dict[str, Any]:
         doc = await self.col.find_one(
             {"tenant_id": tenant_id, "scenario_id": scenario_id, "version": version},
@@ -96,7 +104,9 @@ class ScenarioRepository:
         return doc
 
     async def get_latest(
-        self, tenant_id: str, scenario_id: str,
+        self,
+        tenant_id: str,
+        scenario_id: str,
     ) -> dict[str, Any]:
         doc = await self.col.find_one(
             {"tenant_id": tenant_id, "scenario_id": scenario_id},
@@ -108,7 +118,9 @@ class ScenarioRepository:
         return doc
 
     async def get_published(
-        self, tenant_id: str, scenario_id: str,
+        self,
+        tenant_id: str,
+        scenario_id: str,
     ) -> dict[str, Any]:
         """스냅샷 엔진이 로드하는 유일한 경로. published=True 가 없으면 404."""
         doc = await self.col.find_one(
@@ -144,7 +156,7 @@ class ScenarioRepository:
         )
         next_version = (latest["version"] + 1) if latest else 1
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         doc = dict(scenario)
         doc["version"] = next_version
         doc["published"] = False
@@ -155,7 +167,10 @@ class ScenarioRepository:
         return {k: v for k, v in doc.items() if k != "_id"}
 
     async def publish(
-        self, tenant_id: str, scenario_id: str, version: int,
+        self,
+        tenant_id: str,
+        scenario_id: str,
+        version: int,
     ) -> dict[str, Any]:
         """
         지정 버전만 published=True 로 올리고 같은 scenario_id 의 다른 버전은 False 로.
@@ -181,7 +196,7 @@ class ScenarioRepository:
             {"$set": {"published": False}},
         )
         # 3. 대상 버전 올리기
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         result = await self.col.find_one_and_update(
             {
                 "tenant_id": tenant_id,
@@ -200,7 +215,10 @@ class ScenarioRepository:
         return result
 
     async def delete_version(
-        self, tenant_id: str, scenario_id: str, version: int,
+        self,
+        tenant_id: str,
+        scenario_id: str,
+        version: int,
     ) -> None:
         """
         단일 버전 삭제. published=True 버전은 삭제 거부 (먼저 다른 버전을 publish).

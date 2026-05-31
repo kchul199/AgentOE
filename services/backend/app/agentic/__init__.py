@@ -15,6 +15,7 @@ CLAUDE.md 원칙 준수:
     * Tool 호출 실패 시 Fallback 엣지로 우아한 폴백
     * Latency 최소화: Checkpointer는 Redis 기반 (Mongo 대비 ~10x 빠름)
 """
-from app.agentic.state import CallbotState  # noqa: F401
-from app.agentic.scenario_dsl import Scenario, Node, Edge  # noqa: F401
+
 from app.agentic.scenario_compiler import compile_scenario  # noqa: F401
+from app.agentic.scenario_dsl import Edge, Node, Scenario  # noqa: F401
+from app.agentic.state import CallbotState  # noqa: F401

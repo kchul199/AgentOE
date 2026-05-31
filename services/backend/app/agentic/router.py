@@ -13,10 +13,10 @@ Strangler Fig Router — AIPipeline(legacy) ↔ LangGraph(new) 라우팅
   * 테넌트 단위 kill-switch: settings.AGENTIC_DISABLED (전역 비활성화)
   * 실험군(canary) 비율 제어: AGENTIC_CANARY_PERCENT (0-100)
 """
+
 from __future__ import annotations
 
 import hashlib
-import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,7 +28,7 @@ log = structlog.get_logger(__name__)
 @dataclass
 class RouteDecision:
     use_agentic: bool
-    reason: str           # 감사/로그용
+    reason: str  # 감사/로그용
     scenario_version: int | None = None
 
 
@@ -73,9 +73,7 @@ class AgenticRouter:
                 )
 
         # 3. settings 레벨 allowlist (초기 롤아웃 단계)
-        allow = set(
-            (getattr(self._settings, "AGENTIC_TENANTS", "") or "").split(",")
-        ) - {""}
+        allow = set((getattr(self._settings, "AGENTIC_TENANTS", "") or "").split(",")) - {""}
         if tenant_id in allow:
             return RouteDecision(True, "tenant_allowlist")
 

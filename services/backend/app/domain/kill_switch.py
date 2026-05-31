@@ -1,16 +1,16 @@
 """Kill Switch — tenant/feature/scenario level emergency stop."""
-from enum import Enum
-from datetime import datetime, timezone
-from typing import Any
 
 import logging
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 from app.core.redis_client import cache_kill_switch, get_kill_switch_cached
 
 logger = logging.getLogger(__name__)
 
 
-class KillSwitchScope(str, Enum):
+class KillSwitchScope(StrEnum):
     TENANT = "tenant"
     FEATURE = "feature"
     SCENARIO = "scenario"
@@ -19,12 +19,13 @@ class KillSwitchScope(str, Enum):
 class KillSwitchService:
     """Checks if a Kill Switch is active for a given scope/target."""
 
-    def __init__(self, db=None) -> None:
+    def __init__(self, db: Any = None) -> None:
         self._db = db
 
     @property
-    def col(self):
+    def col(self) -> Any:
         from app.core.database import get_database
+
         db = self._db or get_database()
         return db["kill_switches"]
 
@@ -36,11 +37,13 @@ class KillSwitchService:
             return cached
 
         # 2. MongoDB 조회 (캐시 미스)
-        doc = await self.col.find_one({
-            "scope": scope.value,
-            "target_id": target_id,
-            "active": True,
-        })
+        doc = await self.col.find_one(
+            {
+                "scope": scope.value,
+                "target_id": target_id,
+                "active": True,
+            }
+        )
         active = doc is not None
 
         # 3. 캐시 갱신
@@ -55,26 +58,28 @@ class KillSwitchService:
         activated_by: str,
     ) -> dict[str, Any]:
         import uuid
-        switch_id = f"ks_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
+        switch_id = f"ks_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         doc = {
             "switch_id": switch_id,
             "scope": scope.value,
             "target_id": target_id,
             "reason": reason,
             "activated_by": activated_by,
-            "activated_at": datetime.now(timezone.utc),
+            "activated_at": datetime.now(UTC),
             "active": True,
         }
         await self.col.insert_one(doc)
         await cache_kill_switch(scope.value, target_id, True)
-        logger.warning("Kill switch activated",
-                       switch_id=switch_id, scope=scope.value, target_id=target_id)
+        logger.warning(  # type: ignore[call-arg]
+            "Kill switch activated", switch_id=switch_id, scope=scope.value, target_id=target_id
+        )
         return {k: v for k, v in doc.items() if k != "_id"}
 
     async def deactivate(self, switch_id: str) -> dict[str, Any] | None:
         doc = await self.col.find_one_and_update(
             {"switch_id": switch_id, "active": True},
-            {"$set": {"active": False, "deactivated_at": datetime.now(timezone.utc)}},
+            {"$set": {"active": False, "deactivated_at": datetime.now(UTC)}},
             return_document=True,
         )
         if doc:

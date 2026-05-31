@@ -1,9 +1,12 @@
 """Unit tests for BaseConnector SDK."""
+
 import pytest
-import asyncio
+
 from app.connectors.base_connector import (
-    BaseConnector, ConnectorRequest, ConnectorResponse,
-    ConnectorStatus, MaskingEngine,
+    BaseConnector,
+    ConnectorRequest,
+    ConnectorStatus,
+    MaskingEngine,
 )
 from app.connectors.connector_registry import ConnectorRegistry
 
@@ -56,8 +59,8 @@ async def test_masking_engine_masks_sensitive():
     assert "account_number" in fields
     assert masked["account_number"] != "123456789012"
     assert "*" in masked["account_number"]
-    assert masked["name"] == "홍길동"          # 마스킹 안됨
-    assert masked["balance"] == 50000          # 마스킹 안됨
+    assert masked["name"] == "홍길동"  # 마스킹 안됨
+    assert masked["balance"] == 50000  # 마스킹 안됨
 
 
 @pytest.mark.asyncio
@@ -71,10 +74,15 @@ async def test_masking_short_value():
 @pytest.mark.asyncio
 async def test_connector_registry_dispatch():
     registry = ConnectorRegistry()
-    registry.register("echo-1", "crm", "t1", {
-        "endpoint": "http://test-crm",
-        "api_key": "test-key",
-    })
+    registry.register(
+        "echo-1",
+        "crm",
+        "t1",
+        {
+            "endpoint": "http://test-crm",
+            "api_key": "test-key",
+        },
+    )
     connectors = registry.list_connectors("t1")
     assert "echo-1" in connectors
 

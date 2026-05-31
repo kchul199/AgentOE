@@ -1,6 +1,8 @@
 """Unit tests for Kill Switch."""
+
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.domain.kill_switch import KillSwitchScope, KillSwitchService
 
@@ -26,9 +28,16 @@ def service(mock_col):
 @pytest.mark.asyncio
 async def test_is_active_returns_false_when_no_switch():
     service = KillSwitchService()
-    with patch("app.domain.kill_switch.get_kill_switch_cached", return_value=None), \
-         patch.object(type(service), "col", new_callable=lambda: property(
-             lambda self: AsyncMock(find_one=AsyncMock(return_value=None)))):
+    with (
+        patch("app.domain.kill_switch.get_kill_switch_cached", return_value=None),
+        patch.object(
+            type(service),
+            "col",
+            new_callable=lambda: property(
+                lambda self: AsyncMock(find_one=AsyncMock(return_value=None))
+            ),
+        ),
+    ):
         result = await service.is_active(KillSwitchScope.TENANT, "tenant-x")
         assert result is False
 

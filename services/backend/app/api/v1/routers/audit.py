@@ -1,4 +1,5 @@
 """Audit log query API."""
+
 from datetime import datetime
 from typing import Annotated
 

@@ -10,41 +10,48 @@ Unit tests for LoggingMiddleware + logging.py helpers
   - WebSocket 경로 (/ws/*) pass-through
   - 401/500 상태코드 시 로그 레벨 검증
 """
+
 from __future__ import annotations
 
 import base64
 import json
 import sys
 import unittest.mock as mock
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from structlog.contextvars import get_contextvars
 
 # 외부 의존성 mock
 for mod in [
-    "motor", "motor.motor_asyncio", "pymongo", "pymongo.errors",
-    "redis", "redis.asyncio", "groq",
-    "google.cloud", "google.cloud.texttospeech",
-    "google.cloud.texttospeech_v1", "grpc",
+    "motor",
+    "motor.motor_asyncio",
+    "pymongo",
+    "pymongo.errors",
+    "redis",
+    "redis.asyncio",
+    "groq",
+    "google.cloud",
+    "google.cloud.texttospeech",
+    "google.cloud.texttospeech_v1",
+    "grpc",
 ]:
     if mod not in sys.modules:
         sys.modules[mod] = mock.MagicMock()
 
-from app.middleware.logging_middleware import (
-    LoggingMiddleware,
-    _extract_tenant_from_jwt,
-)
+from app.core.auth import create_access_token
 from app.core.logging import (
+    bind_pipeline_context,
     bind_request_context,
     bind_session_context,
     clear_request_context,
-    bind_pipeline_context,
 )
-from app.core.auth import create_access_token
-
+from app.middleware.logging_middleware import (
+    _extract_tenant_from_jwt,
+)
 
 # ── 픽스처 ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(autouse=True)
 def clean_context():
@@ -72,12 +79,12 @@ def test_extract_tenant_no_header():
 
 
 def test_extract_tenant_invalid_format():
-    tenant_id, client_id = _extract_tenant_from_jwt("Token abc123")
+    tenant_id, _client_id = _extract_tenant_from_jwt("Token abc123")
     assert tenant_id is None
 
 
 def test_extract_tenant_malformed_jwt():
-    tenant_id, client_id = _extract_tenant_from_jwt("Bearer not.a.jwt")
+    tenant_id, _client_id = _extract_tenant_from_jwt("Bearer not.a.jwt")
     assert tenant_id is None
 
 
@@ -167,15 +174,22 @@ def test_clear_request_context_removes_all():
 
 @pytest.fixture
 def client():
-    with patch("app.core.database.init_db", new_callable=AsyncMock), \
-         patch("app.core.database.close_db", new_callable=AsyncMock), \
-         patch("app.core.redis_client.init_redis", new_callable=AsyncMock), \
-         patch("app.core.redis_client.close_redis", new_callable=AsyncMock), \
-         patch("app.core.redis_client.get_redis", return_value=AsyncMock()), \
-         patch("app.domain.kill_switch.KillSwitchService.is_active",
-               new_callable=AsyncMock, return_value=False):
+    with (
+        patch("app.core.database.init_db", new_callable=AsyncMock),
+        patch("app.core.database.close_db", new_callable=AsyncMock),
+        patch("app.core.redis_client.init_redis", new_callable=AsyncMock),
+        patch("app.core.redis_client.close_redis", new_callable=AsyncMock),
+        patch("app.core.redis_client.get_redis", return_value=AsyncMock()),
+        patch(
+            "app.domain.kill_switch.KillSwitchService.is_active",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
         from fastapi.testclient import TestClient
+
         from app.main import app
+
         with TestClient(app, raise_server_exceptions=False) as c:
             yield c
 

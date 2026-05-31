@@ -5,6 +5,7 @@ kinetic path:
   check_quota 는 단순 조회, enforce_quota 는 policy 분기,
   commit_usage 는 pipeline INCRBY+EXPIRE.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -55,7 +56,8 @@ async def test_check_quota_over_tokens(fake_redis) -> None:
 
 @pytest.mark.asyncio
 async def test_enforce_quota_fallback_raises_graceful(
-    fake_redis, monkeypatch,
+    fake_redis,
+    monkeypatch,
 ) -> None:
     fake_redis.mget = AsyncMock(return_value=[b"5000001", b"0"])
     with pytest.raises(quota_mod.QuotaExceededError) as exc_info:
@@ -66,11 +68,14 @@ async def test_enforce_quota_fallback_raises_graceful(
 
 @pytest.mark.asyncio
 async def test_enforce_quota_reject_raises_non_graceful(
-    fake_redis, monkeypatch,
+    fake_redis,
+    monkeypatch,
 ) -> None:
     fake_redis.mget = AsyncMock(return_value=[b"0", b"1001"])  # cost 초과
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_QUOTA_EXCEEDED_BEHAVIOR", "reject",
+        quota_mod.settings,
+        "LLM_QUOTA_EXCEEDED_BEHAVIOR",
+        "reject",
     )
     with pytest.raises(quota_mod.QuotaExceededError) as exc_info:
         await quota_mod.enforce_quota("tenant-A")
@@ -82,7 +87,9 @@ async def test_enforce_quota_reject_raises_non_graceful(
 async def test_enforce_quota_warn_only_passes(fake_redis, monkeypatch) -> None:
     fake_redis.mget = AsyncMock(return_value=[b"5000001", b"0"])
     monkeypatch.setattr(
-        quota_mod.settings, "LLM_QUOTA_EXCEEDED_BEHAVIOR", "warn",
+        quota_mod.settings,
+        "LLM_QUOTA_EXCEEDED_BEHAVIOR",
+        "warn",
     )
     # warn 정책은 예외 없이 status 반환
     status = await quota_mod.enforce_quota("tenant-A")
@@ -91,7 +98,8 @@ async def test_enforce_quota_warn_only_passes(fake_redis, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_enforce_quota_disabled_short_circuits(
-    fake_redis, monkeypatch,
+    fake_redis,
+    monkeypatch,
 ) -> None:
     monkeypatch.setattr(quota_mod.settings, "LLM_QUOTA_ENABLED", False)
     status = await quota_mod.enforce_quota("tenant-A")
@@ -121,7 +129,8 @@ async def test_commit_usage_zero_noop(fake_redis) -> None:
 
 @pytest.mark.asyncio
 async def test_check_quota_fail_open_on_redis_error(
-    fake_redis, monkeypatch,
+    fake_redis,
+    monkeypatch,
 ) -> None:
     fake_redis.mget = AsyncMock(side_effect=quota_mod.RedisError("boom"))
     status = await quota_mod.check_quota("tenant-A")

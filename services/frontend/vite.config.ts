@@ -11,6 +11,7 @@ import { fileURLToPath, URL } from "node:url";
  */
 export default defineConfig({
   plugins: [react()],
+  cacheDir: "/tmp/vite-agentoe-cache",
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

@@ -7,6 +7,7 @@
   - record_jwks_refresh — success/failure 히스토그램 관측
   - generate_prometheus_metrics() — fallback 텍스트 포맷에 신규 메트릭 포함
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,6 +23,7 @@ def _reset_store():
 
 
 # ── record_quota_check ────────────────────────────────────────────────────────
+
 
 def test_quota_check_ok_path() -> None:
     m.record_quota_check("tenant-A", scope="none", result="ok")
@@ -48,6 +50,7 @@ def test_quota_check_accumulates() -> None:
 
 # ── record_llm_usage ──────────────────────────────────────────────────────────
 
+
 def test_llm_usage_records_both_axes() -> None:
     m.record_llm_usage("tenant-A", model="llama3-70b", tokens=100, cost_cents=1.25)
     assert m._store.llm_tokens_consumed["tenant-A:llama3-70b"].get() == 100.0
@@ -68,6 +71,7 @@ def test_llm_usage_tokens_only() -> None:
 
 # ── record_jwks_lookup ────────────────────────────────────────────────────────
 
+
 def test_jwks_lookup_valid_results() -> None:
     for r in ["hit", "miss", "force_refresh", "fail"]:
         m.record_jwks_lookup(r)
@@ -81,6 +85,7 @@ def test_jwks_lookup_ignores_invalid() -> None:
 
 
 # ── record_jwks_refresh ───────────────────────────────────────────────────────
+
 
 def test_jwks_refresh_success_histogram() -> None:
     m.record_jwks_refresh(0.15, success=True)
@@ -97,6 +102,7 @@ def test_jwks_refresh_failure_separate_bucket() -> None:
 
 
 # ── generate_prometheus_metrics fallback 포맷 ─────────────────────────────────
+
 
 def test_prometheus_text_includes_new_metrics(monkeypatch) -> None:
     """prometheus_client 가 없을 때의 fallback 텍스트에 신규 메트릭이 포함되는지."""
@@ -124,6 +130,7 @@ def test_prometheus_text_includes_new_metrics(monkeypatch) -> None:
 
 
 # ── Track 2 P2: WS back-pressure 메트릭 ────────────────────────────────────────
+
 
 def test_set_ws_queue_depth_records_gauge() -> None:
     m.set_ws_queue_depth("tenant-A", 3)

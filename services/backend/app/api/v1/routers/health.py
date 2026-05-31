@@ -8,6 +8,7 @@ K8s 각 probe 역할:
 
 기존 /health는 하위호환으로 유지 (대시보드/로드밸런서에서 사용 중).
 """
+
 from __future__ import annotations
 
 import time
@@ -38,7 +39,7 @@ async def _check_mongo() -> tuple[bool, str]:
         # ping은 1-RTT 미만 — 핫패스 허용 범위
         await db.command("ping")
         return True, "ok"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return False, f"mongo: {e}"
 
 
@@ -46,9 +47,9 @@ async def _check_redis() -> tuple[bool, str]:
     try:
         from app.core.redis_client import get_redis
 
-        await get_redis().ping()
+        await get_redis().ping()  # type: ignore[misc]
         return True, "ok"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return False, f"redis: {e}"
 
 

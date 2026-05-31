@@ -1,0 +1,139 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# agentoe-portal 로컬 개발 스택
+#
+# 기동:   docker compose -f docker/compose.ops-portal.dev.yml up -d
+# 종료:   docker compose -f docker/compose.ops-portal.dev.yml down
+#
+# 포트:
+#   8000  backend  (FastAPI + portal 라우터)
+#   27017 MongoDB
+#   6380  Redis (host) ← 6379 (container)
+#   8081  mongo-express (선택)
+#
+# ops-portal Vite 개발 서버는 compose 밖에서 실행:
+#   cd services/ops-portal && npm run dev
+# ─────────────────────────────────────────────────────────────────────────────
+version: "3.9"
+
+services:
+  # ── MongoDB ───────────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: agentoe-portal-mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}
+      MONGO_INITDB_DATABASE: agentoe
+    volumes:
+      - portal-mongo-data:/data/db
+    networks:
+      - portal-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: agentoe-portal-redis
+    ports:
+      - "6380:6379"
+    networks:
+      - portal-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+    restart: unless-stopped
+
+  # ── Backend (FastAPI — reload 모드) ───────────────────────────────────────
+  backend:
+    build:
+      context: ../services/backend
+      dockerfile: Dockerfile.dev
+    container_name: agentoe-portal-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # ── 공통 ──────────────────────────────────────────────────────────────
+      ENVIRONMENT: development
+      LOG_LEVEL: debug
+
+      # ── MongoDB / Redis ───────────────────────────────────────────────────
+      MONGODB_URI: "mongodb://admin:${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}@mongo:27017/agentoe?authSource=admin"
+      MONGODB_DB_NAME: agentoe
+      REDIS_URL: redis://redis:6379/0
+
+      # ── JWT (공용) ────────────────────────────────────────────────────────
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-local-only}
+
+      # ── Portal 인증 ───────────────────────────────────────────────────────
+      # PORTAL_ORIGIN: Vite dev 서버 주소 (CORS + cookie SameSite)
+      PORTAL_ORIGIN: "http://localhost:5174"
+      PORTAL_JWT_SECRET: ${PORTAL_JWT_SECRET:-dev-portal-jwt-secret-local}
+      PORTAL_JWT_EXPIRE_MINUTES: "30"        # 로컬 dev 편의상 길게
+      PORTAL_REFRESH_EXPIRE_HOURS: "24"
+
+      # MFA envelope key — 32 바이트 hex (64 문자).
+      # 아래는 로컬 전용 샘플. 절대 운영 환경에 사용하지 말 것.
+      PORTAL_MFA_ENVELOPE_KEY: ${PORTAL_MFA_ENVELOPE_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      # KMS 는 로컬에서 불필요 — 비워두면 env-key fallback
+      PORTAL_KMS_KEY_ID: ""
+
+      # ── Alertmanager / Prometheus (없으면 빈 응답 반환) ───────────────────
+      ALERTMANAGER_URL: ${ALERTMANAGER_URL:-http://localhost:9093}
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://localhost:9090}
+
+      # ── 멀티테넌트 / gRPC (dev 더미) ─────────────────────────────────────
+      GROQ_API_KEY: ${GROQ_API_KEY:-dummy-groq-key-for-dev}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/credentials/google-tts.json
+
+      # SSE 연결 수 제한 (0 = 비활성)
+      SSE_MAX_CONNECTIONS_PER_POD: "0"
+    volumes:
+      - ../services/backend:/app       # 소스 실시간 반영 (--reload)
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - portal-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+    restart: unless-stopped
+
+  # ── mongo-express (선택 — DB 브라우저) ───────────────────────────────────
+  mongo-express:
+    image: mongo-express:1.0
+    container_name: agentoe-portal-mongo-express
+    profiles: ["tools"]          # docker compose --profile tools up 으로만 기동
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}
+      ME_CONFIG_MONGODB_URL: "mongodb://admin:${MONGO_ROOT_PASSWORD:-agentoe_dev_pass}@mongo:27017/?authSource=admin"
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:-admin}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - portal-net
+    restart: unless-stopped
+
+volumes:
+  portal-mongo-data:
+
+networks:
+  portal-net:
+    driver: bridge

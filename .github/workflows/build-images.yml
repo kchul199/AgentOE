@@ -44,6 +44,7 @@ jobs:
           filters: |
             backend:           ['services/backend/**']
             frontend:          ['services/frontend/**']
+            ops_portal:        ['services/ops-portal/**']
             vbgw_ai:           ['services/vbgw-ai/**', 'contracts/**']
             vbgw_bridge:       ['services/vbgw-bridge/**', 'contracts/**']
             vbgw_orchestrator: ['services/vbgw-orchestrator/**']
@@ -51,7 +52,7 @@ jobs:
 
       - id: plan
         run: |
-          ALL='["backend","frontend","vbgw-ai","vbgw-bridge","vbgw-orchestrator"]'
+          ALL='["backend","frontend","ops-portal","vbgw-ai","vbgw-bridge","vbgw-orchestrator"]'
           # tag push 또는 workflow_dispatch 입력은 전체 빌드 의도로 간주.
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             echo "services=$ALL" >> "$GITHUB_OUTPUT"; exit 0
@@ -60,10 +61,11 @@ jobs:
             arr=$(echo "${{ inputs.services }}" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$";""))')
             echo "services=$arr" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          # path filter 결과 기반 — vbgw_* 변경은 해당 service 만 빌드
+          # path filter 결과 기반 — 변경된 service 만 빌드
           arr='[]'
           [[ "${{ steps.changed.outputs.backend           }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["backend"]')
           [[ "${{ steps.changed.outputs.frontend          }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["frontend"]')
+          [[ "${{ steps.changed.outputs.ops_portal        }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["ops-portal"]')
           [[ "${{ steps.changed.outputs.vbgw_ai           }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["vbgw-ai"]')
           [[ "${{ steps.changed.outputs.vbgw_bridge       }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["vbgw-bridge"]')
           [[ "${{ steps.changed.outputs.vbgw_orchestrator }}" == "true" ]] && arr=$(echo "$arr" | jq -c '. + ["vbgw-orchestrator"]')
@@ -97,6 +99,8 @@ jobs:
             context: services/backend
           - service: frontend
             context: services/frontend
+          - service: ops-portal
+            context: services/ops-portal
           - service: vbgw-ai
             context: services/vbgw-ai
           - service: vbgw-bridge

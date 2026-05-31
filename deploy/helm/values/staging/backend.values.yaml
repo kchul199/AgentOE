@@ -102,6 +102,11 @@ config:
   AGENTIC_TENANTS: ""
   AGENTIC_CANARY_PERCENT: "100"     # staging 은 100% agentic
 
+  # ── Phase N — 운영포탈 (N1.12) ─────────────────────────────────────────
+  PORTAL_ORIGIN: "https://portal-staging.agentoe.io"
+  # staging 은 낮은 상한 (부하테스트 격리)
+  SSE_MAX_CONNECTIONS_PER_POD: "50"
+
 # ── External Secrets ────────────────────────────────────────────────────
 externalSecrets:
   enabled: true
@@ -113,6 +118,9 @@ container:
   workers: 2
   grpcEnabled: true
   grpcPort: 50051
+  # N1.12 — staging 은 낮은 값으로 가드 동작 검증.
+  # workers=2 × 50 = 100. SSE_MAX_CONNECTIONS_PER_POD=50 이 2차.
+  limitConcurrency: "100"
 
 # vbgw_v2 는 같은 클러스터의 별도 namespace `vbgw-staging` 에 배포 가정.
 networkPolicy:

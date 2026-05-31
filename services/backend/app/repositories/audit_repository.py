@@ -12,10 +12,10 @@ WORM 보장 (Write-Once-Read-Many):
 
 이 3계층 중 하나가 무너져도 다른 둘이 남아있도록 defense-in-depth.
 """
-from datetime import datetime, timezone
-from typing import Any
 
 import logging
+from datetime import UTC, datetime
+from typing import Any
 
 from app.core.database import get_database
 
@@ -29,11 +29,11 @@ class AuditRepository:
     모든 수정은 새 `log()` 호출로 append 해야 합니다.
     """
 
-    def __init__(self, db=None) -> None:
+    def __init__(self, db: Any = None) -> None:
         self._db = db
 
     @property
-    def col(self):
+    def col(self) -> Any:
         db = self._db or get_database()
         return db["audit_events"]
 
@@ -44,28 +44,80 @@ class AuditRepository:
         session_id: str | None = None,
         actor: str = "system",
         details: dict[str, Any] | None = None,
-    ) -> None:
+        *,
+        # Phase N (NG1) — 신규 필드는 모두 metadata.* (metaField) 하위로.
+        # Time Series 콜렉션은 metaField 인덱스가 가장 효율적이므로 actor_*, action,
+        # trace_id, env 모두 여기에. 옛 호출 (kwarg 미지정) 은 None — backward-compat.
+        env: str | None = None,
+        actor_client_id: str | None = None,
+        actor_roles: list[str] | None = None,
+        actor_ip: str | None = None,
+        actor_user_agent: str | None = None,
+        actor_issuer: str | None = None,
+        action: str | None = None,
+        trace_id: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        before: dict[str, Any] | None = None,
+        after: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Append an audit event (fire-and-forget pattern).
 
         이 메서드의 예외는 **삼켜짐** — 감사 로그 쓰기 실패가 메인 통화 흐름을
         방해해서는 안 되기 때문. 그러나 로그는 반드시 ERROR 레벨로 남겨
         DLQ / Prometheus 로 관찰 가능하게 할 것.
+
+        반환값: 성공 시 insert 한 도큐먼트 사본 (Redis publish 등 후속 사용용),
+                실패 시 None.
+
+        Phase N (NG1): 신규 emit 은 keyword-only 신규 필드를 채워야 함. 기존
+        호출 (`event_type=`, `tenant_id=`, `actor=`, `details=` 만) 은 그대로
+        동작 — 옛 도큐먼트는 metadata.trace_id 등이 null 인 것이 정상.
         """
+        metadata: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "session_id": session_id,
+            "event_type": event_type,
+        }
+        # 신규 필드는 채워진 경우에만 박는다 (저장 공간 절약 + None 명시 회피).
+        if env is not None:
+            metadata["env"] = env
+        if actor_client_id is not None:
+            metadata["actor_client_id"] = actor_client_id
+        if actor_roles is not None:
+            metadata["actor_roles"] = actor_roles
+        if actor_ip is not None:
+            metadata["actor_ip"] = actor_ip
+        if actor_user_agent is not None:
+            metadata["actor_user_agent"] = actor_user_agent
+        if actor_issuer is not None:
+            metadata["actor_issuer"] = actor_issuer
+        if action is not None:
+            metadata["action"] = action
+        if trace_id is not None:
+            metadata["trace_id"] = trace_id
+        if resource_type is not None:
+            metadata["resource_type"] = resource_type
+        if resource_id is not None:
+            metadata["resource_id"] = resource_id
+        if before is not None:
+            metadata["before"] = before
+        if after is not None:
+            metadata["after"] = after
+
         doc = {
-            "timestamp": datetime.now(timezone.utc),  # timeField
-            "metadata": {                              # metaField
-                "tenant_id": tenant_id,
-                "session_id": session_id,
-                "event_type": event_type,
-            },
+            "timestamp": datetime.now(UTC),  # timeField
+            "metadata": metadata,
             "actor": actor,
             "details": details or {},
         }
         try:
             await self.col.insert_one(doc)
+            return doc
         except Exception as e:
             # 감사 로그 실패가 메인 흐름을 막지 않도록
             logger.error("Audit log write failed: %s (event_type=%s)", str(e), event_type)
+            return None
 
     async def query(
         self,
@@ -93,11 +145,12 @@ class AuditRepository:
         pipeline = [
             {"$match": match},
             {"$sort": {"timestamp": -1}},
-            {"$facet": {
-                "items": [{"$skip": offset}, {"$limit": limit},
-                          {"$project": {"_id": 0}}],
-                "total": [{"$count": "count"}],
-            }},
+            {
+                "$facet": {
+                    "items": [{"$skip": offset}, {"$limit": limit}, {"$project": {"_id": 0}}],
+                    "total": [{"$count": "count"}],
+                }
+            },
         ]
         result = await self.col.aggregate(pipeline).to_list(1)
         if not result:

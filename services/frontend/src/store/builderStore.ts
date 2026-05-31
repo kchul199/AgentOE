@@ -200,7 +200,15 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
 
   // ── Palette drop → 노드 추가 ───────────────────────────────────────
   addNodeFromPalette: (type, position) => {
-    const existing = new Set(get().nodes.map((n) => n.id));
+    const state = get();
+    const existing = new Set(state.nodes.map((n) => n.id));
+
+    // start 노드 중복 방지: 이미 있으면 추가하지 않음
+    if (type === "start" && state.nodes.some((n) => n.data.dsl.type === "start")) {
+      state.pushToast("error", "Start 노드는 시나리오에 1개만 허용됩니다.", 3000);
+      return "";
+    }
+
     const id = uniqueNodeId(existing, type);
     const config = defaultNodeConfig(type);
     const dsl = { id, type, config } as DslNode;
@@ -210,7 +218,16 @@ export const useBuilderStore = create<BuilderState>((set, get) => ({
       position,
       data: { dsl },
     };
-    set((s) => ({ nodes: [...s.nodes, node] }));
+
+    // start 노드 추가 시 meta.entry 자동 설정
+    if (type === "start") {
+      set((s) => ({
+        nodes: [...s.nodes, node],
+        meta: { ...s.meta, entry: id },
+      }));
+    } else {
+      set((s) => ({ nodes: [...s.nodes, node] }));
+    }
     return id;
   },
 

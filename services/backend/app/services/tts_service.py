@@ -2,6 +2,7 @@
 TTS Service — Google Cloud Text-to-Speech Neural2 (ko-KR)
 Circuit Breaker 적용, PCM 22kHz 스트리밍 출력
 """
+
 import logging
 import time
 from dataclasses import dataclass
@@ -43,9 +44,10 @@ class TTSService:
         if self._client is None:
             try:
                 from google.cloud import texttospeech
+
                 self._client = texttospeech.TextToSpeechAsyncClient()
             except ImportError:
-                raise RuntimeError("google-cloud-texttospeech not installed")
+                raise RuntimeError("google-cloud-texttospeech not installed") from None
         return self._client
 
     async def synthesize(
@@ -60,8 +62,9 @@ class TTSService:
         RuntimeError(패키지 미설치)는 excluded_exceptions이므로 CB failure_count에
         포함되지 않습니다. 그 외 모든 예외는 failure_count를 증가시킵니다.
         """
-        from app.core.config import settings
         from google.cloud import texttospeech
+
+        from app.core.config import settings
 
         lang = language_code or settings.GOOGLE_TTS_LANGUAGE
         voice = voice_name or settings.GOOGLE_TTS_VOICE

@@ -9,6 +9,7 @@ CallbotState — LangGraph StateGraph 전역 상태 정의
      → bytes / datetime 같은 타입은 여기 담지 말 것
   5. 세션 전반의 컨텍스트(캐릭터/정책/메모리)는 session_meta 에 둔다
 """
+
 from __future__ import annotations
 
 import operator
@@ -18,6 +19,7 @@ from typing import Annotated, Any, Literal, TypedDict
 try:
     from langgraph.graph.message import add_messages
 except ImportError:  # pragma: no cover — langgraph 미설치 시 placeholder
+
     def add_messages(left: list, right: list) -> list:
         """Fallback reducer: langgraph 미설치 환경에서도 동작"""
         return (left or []) + (right or [])
@@ -26,6 +28,7 @@ except ImportError:  # pragma: no cover — langgraph 미설치 시 placeholder
 # ── 메시지 타입 ──────────────────────────────────────────────────────────────
 class Message(TypedDict, total=False):
     """대화 메시지 (user / assistant / system / tool)"""
+
     role: Literal["user", "assistant", "system", "tool"]
     content: str
     # tool 호출 메타
@@ -45,8 +48,8 @@ class SessionMeta(TypedDict, total=False):
     scenario_id: str
     scenario_version: int
     caller_number: str | None
-    language: str          # 예: "ko-KR"
-    policy_level: str      # 예: "strict" | "standard" | "loose"
+    language: str  # 예: "ko-KR"
+    policy_level: str  # 예: "strict" | "standard" | "loose"
     persona: dict[str, Any] | None  # 캐릭터 프롬프트, 톤
     feature_flags: dict[str, bool]
 
@@ -64,6 +67,7 @@ class CallbotState(TypedDict, total=False):
     LangGraph 전역 상태.
     각 노드는 일부 필드만 반환 (partial update) — LangGraph reducer가 병합.
     """
+
     # 세션/테넌트 메타 (immutable within a turn)
     session: SessionMeta
 
@@ -71,18 +75,18 @@ class CallbotState(TypedDict, total=False):
     messages: Annotated[list[Message], add_messages]
 
     # 현재 턴의 입력/출력
-    user_input: str          # STT 결과 (current turn)
-    assistant_output: str    # 누적된 LLM 응답 (current turn)
+    user_input: str  # STT 결과 (current turn)
+    assistant_output: str  # 누적된 LLM 응답 (current turn)
 
     # 인텐트/슬롯
     intent: IntentResult | None
-    slots: dict[str, Any]    # 누적 슬롯 (replace)
+    slots: dict[str, Any]  # 누적 슬롯 (replace)
 
     # 흐름 제어
-    next_node: str | None            # Branch 노드가 지정
-    should_transfer: bool             # 상담원 전환 요청
-    should_end: bool                  # 세션 종료
-    fallback_triggered: bool          # Tool 실패 → Fallback 진입 여부
+    next_node: str | None  # Branch 노드가 지정
+    should_transfer: bool  # 상담원 전환 요청
+    should_end: bool  # 세션 종료
+    fallback_triggered: bool  # Tool 실패 → Fallback 진입 여부
 
     # Tool 호출 이력 (디버깅/감사용)
     tool_calls: Annotated[list[dict[str, Any]], operator.add]
@@ -92,7 +96,7 @@ class CallbotState(TypedDict, total=False):
 
     # 성능/비용 측정
     turn_latency_ms: float
-    token_usage: dict[str, int]       # {prompt: n, completion: n}
+    token_usage: dict[str, int]  # {prompt: n, completion: n}
     cost_cents: float
 
 

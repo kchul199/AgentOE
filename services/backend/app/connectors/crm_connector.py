@@ -2,6 +2,7 @@
 CRM Connector — HTTP REST 기반 CRM 시스템 연동
 고객 정보 조회/갱신, 통화 이력 저장
 """
+
 import logging
 from typing import Any
 
@@ -33,6 +34,7 @@ class CRMConnector(BaseConnector):
         if self._session is None:
             try:
                 import httpx
+
                 self._session = httpx.AsyncClient(
                     base_url=self.config["endpoint"],
                     headers={
@@ -43,7 +45,7 @@ class CRMConnector(BaseConnector):
                     timeout=5.0,
                 )
             except ImportError:
-                raise RuntimeError("httpx not installed")
+                raise RuntimeError("httpx not installed") from None
         return self._session
 
     async def _execute(self, request: ConnectorRequest) -> dict[str, Any]:
@@ -81,6 +83,7 @@ class CRMConnector(BaseConnector):
 
     async def health_check(self) -> dict[str, Any]:
         import time
+
         start = time.monotonic()
         try:
             session = self._get_session()

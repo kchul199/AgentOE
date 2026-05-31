@@ -6,11 +6,13 @@ Transfer Node — 상담원 전환.
   2) VBGW 에 transfer 요청 (gRPC 또는 내부 이벤트)
   3) state["should_transfer"]=True, should_end=True 설정 → 그래프 종료
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import structlog
 
@@ -59,11 +61,13 @@ def make_transfer_node(
             # 전환 자체가 실패해도 봇은 종료 — 안내 메시지 후 hangup
             return {
                 "assistant_output": "죄송합니다. 잠시 후 다시 시도해 주세요.",
-                "messages": [Message(
-                    role="assistant",
-                    content="죄송합니다. 잠시 후 다시 시도해 주세요.",
-                    node_id="transfer-failed",
-                )],
+                "messages": [
+                    Message(
+                        role="assistant",
+                        content="죄송합니다. 잠시 후 다시 시도해 주세요.",
+                        node_id="transfer-failed",
+                    )
+                ],
                 "should_end": True,
                 "errors": [{"node": "transfer", "reason": str(exc)[:200]}],
             }

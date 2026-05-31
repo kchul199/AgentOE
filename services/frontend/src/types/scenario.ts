@@ -89,17 +89,23 @@ export const EndNodeConfigSchema = z.object({
   closing_message: z.string().nullable().optional(),
 });
 
+export const StartNodeConfigSchema = z.object({
+  trigger_type: z.enum(["inbound_call", "outbound_call", "scheduled"]).default("inbound_call"),
+  greeting_message: z.string().nullable().optional(),
+});
+
 // ── 노드 Tagged Union ───────────────────────────────────────────────────────
 
 export const NodeSchema = z.discriminatedUnion("type", [
-  z.object({ ...NODE_BASE, type: z.literal("intent"), config: IntentNodeConfigSchema }),
-  z.object({ ...NODE_BASE, type: z.literal("llm"), config: LLMNodeConfigSchema }),
-  z.object({ ...NODE_BASE, type: z.literal("tool"), config: ToolNodeConfigSchema }),
-  z.object({ ...NODE_BASE, type: z.literal("branch"), config: BranchNodeConfigSchema }),
+  z.object({ ...NODE_BASE, type: z.literal("start"),    config: StartNodeConfigSchema.default({}) }),
+  z.object({ ...NODE_BASE, type: z.literal("intent"),   config: IntentNodeConfigSchema }),
+  z.object({ ...NODE_BASE, type: z.literal("llm"),      config: LLMNodeConfigSchema }),
+  z.object({ ...NODE_BASE, type: z.literal("tool"),     config: ToolNodeConfigSchema }),
+  z.object({ ...NODE_BASE, type: z.literal("branch"),   config: BranchNodeConfigSchema }),
   z.object({ ...NODE_BASE, type: z.literal("transfer"), config: TransferNodeConfigSchema }),
-  z.object({ ...NODE_BASE, type: z.literal("wait"), config: WaitNodeConfigSchema }),
-  z.object({ ...NODE_BASE, type: z.literal("context"), config: ContextUpdateNodeConfigSchema }),
-  z.object({ ...NODE_BASE, type: z.literal("end"), config: EndNodeConfigSchema.default({}) }),
+  z.object({ ...NODE_BASE, type: z.literal("wait"),     config: WaitNodeConfigSchema }),
+  z.object({ ...NODE_BASE, type: z.literal("context"),  config: ContextUpdateNodeConfigSchema }),
+  z.object({ ...NODE_BASE, type: z.literal("end"),      config: EndNodeConfigSchema.default({}) }),
 ]);
 
 export type ScenarioNode = z.infer<typeof NodeSchema>;
@@ -172,6 +178,7 @@ export interface NodePaletteEntry {
 }
 
 export const NODE_PALETTE: NodePaletteEntry[] = [
+  { type: "start",    label: "Start",    description: "시나리오 시작 (진입점)",     color: "#10b981" },
   { type: "intent",   label: "Intent",   description: "사용자 발화 의도 분류",      color: "#6366f1" },
   { type: "llm",      label: "LLM",      description: "LLM 응답 생성 (스트리밍)",  color: "#0ea5e9" },
   { type: "tool",     label: "Tool",     description: "외부 커넥터/API 호출",       color: "#f59e0b" },

@@ -13,9 +13,9 @@ Unit tests for app/core/metrics.py
   - generate_prometheus_metrics: 텍스트 포맷 검증
   - P95 계산 정확도 (통계적 허용 오차 내)
 """
+
 from __future__ import annotations
 
-import math
 import sys
 import unittest.mock as mock
 
@@ -43,8 +43,8 @@ from app.core.metrics import (
     set_circuit_breaker_state,
 )
 
-
 # ── 픽스처 ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(autouse=True)
 def reset_store():
@@ -155,8 +155,9 @@ def test_gauge_dec_floor_at_zero():
 
 
 def test_record_pipeline_success():
-    record_pipeline_call("t1", success=True, total_ms=500.0,
-                         stt_ms=100.0, llm_ms=250.0, tts_ms=100.0)
+    record_pipeline_call(
+        "t1", success=True, total_ms=500.0, stt_ms=100.0, llm_ms=250.0, tts_ms=100.0
+    )
 
     stats = get_pipeline_stats("t1")["t1"]
     assert stats["calls"]["success"] == 1
@@ -214,6 +215,7 @@ def test_record_transfer_request():
     record_transfer_request("t1", "CUSTOMER_REQUEST")
 
     from app.core.metrics import get_transfer_stats
+
     stats = get_transfer_stats("t1")
     assert stats["t1"]["CUSTOMER_REQUEST"] == 2.0
     assert stats["t1"]["G4_POLICY"] == 1.0
@@ -239,6 +241,7 @@ def test_active_sessions_gauge():
     dec_active_sessions("t1")
 
     from app.core.metrics import get_active_sessions
+
     active = get_active_sessions()
     assert active["t1"] == 1.0
     assert active["t2"] == 1.0
@@ -247,6 +250,7 @@ def test_active_sessions_gauge():
 def test_active_sessions_no_negative():
     dec_active_sessions("t1")  # 0에서 감소
     from app.core.metrics import get_active_sessions
+
     assert get_active_sessions().get("t1", 0.0) == 0.0
 
 
@@ -256,6 +260,7 @@ def test_active_sessions_no_negative():
 def test_set_circuit_breaker_state():
     set_circuit_breaker_state("groq-stt", 2)  # OPEN
     from app.core.metrics import get_circuit_breaker_gauges
+
     assert get_circuit_breaker_gauges()["groq-stt"] == 2.0
 
 

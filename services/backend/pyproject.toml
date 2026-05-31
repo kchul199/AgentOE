@@ -17,6 +17,7 @@ dependencies = [
     "pydantic-settings>=2.3.0",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.0.1,<5",              # passlib 1.7.x 는 bcrypt 5.x 와 비호환 (__about__ 제거)
     "httpx>=0.27.0",
     "groq>=0.9.0",
     "google-cloud-texttospeech>=2.16.0",
@@ -27,6 +28,9 @@ dependencies = [
     "websockets>=12.0",
     "structlog>=24.2.0",
     "tenacity>=8.3.0",
+    # Phase N — Portal MFA + KMS
+    "pyotp>=2.9.0",              # TOTP (RFC 6238)
+    "boto3>=1.34.0",             # AWS KMS envelope (N5.2); 로컬 dev 에서 PORTAL_KMS_KEY_ID="" 이면 불사용
 ]
 
 [project.optional-dependencies]
@@ -42,9 +46,14 @@ dev = [
     # 통합 테스트 전용
     "pytest-httpserver>=1.0.10",   # JWKS 엔드포인트 mock
     "fakeredis>=2.23.0",           # Redis in-memory for quota E2E
+    "fakeredis[aioredis]>=2.23.0", # asyncio Redis stub (통합 테스트)
+    "mongomock-motor>=0.0.21",     # Motor-compatible async MongoDB stub (통합 테스트)
     "cryptography>=42.0.0",        # RSA 키 생성 (JWT 서명 테스트)
     "grpcio-tools>=1.64.0",        # proto stub 재생성 (CI 검증)
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
 
 [tool.black]
 line-length = 100
@@ -69,12 +78,38 @@ python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
 ignore_missing_imports = true
-# 테스트 모듈은 strict 적용 과다 — 살짝 완화
+# type-arg: dict/list 에 파라미터 생략 — 레거시 스타일, 실제 버그 아님
+# no-any-return: Motor/gRPC 반환 타입이 Any — 외부 라이브러리 한계
+disable_error_code = [
+    "type-arg",          # dict/list 파라미터 생략 — 레거시 스타일, 실제 버그 아님
+    "no-any-return",     # Motor/gRPC 반환 타입이 Any — 외부 라이브러리 한계
+    "unused-ignore",     # 외부 라이브러리 stub 가용성/mypy 버전에 따라 type: ignore 필요성 다름
+]
+
+# 테스트 모듈은 strict 완화
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = true
+
+# auto-generated gRPC stubs — 타입 검사 제외
+[[tool.mypy.overrides]]
+module = "app.grpc_stubs.*"
+ignore_errors = true
+
+# 외부 라이브러리 stub 미지원 모듈
+[[tool.mypy.overrides]]
+module = [
+    "motor.*",
+    "grpc.*",
+    "grpc_health.*",
+    "google.cloud.*",
+    "groq.*",
+    "fakeredis.*",
+]
+ignore_missing_imports = true
+ignore_errors = true
 
 # ── Ruff ─────────────────────────────────────────────────────────────────────
 [tool.ruff]
@@ -99,11 +134,22 @@ ignore = [
     "B008",   # FastAPI Depends 는 함수 시그니처 기본값
     "S101",   # assert 허용 (테스트/내부 가드)
     "S104",   # 0.0.0.0 bind (컨테이너)
+    # 한글 문서/주석/문자열에서 발생하는 ambiguous-unicode 오탐 (전각/한글 문장부호).
+    # 코드베이스가 한국어 기반이므로 전역 무시.
+    "RUF001", # ambiguous-unicode-character-string
+    "RUF002", # ambiguous-unicode-character-docstring
+    "RUF003", # ambiguous-unicode-character-comment
+    # 클래스 레벨 상수 컬렉션(set/dict) — 불변 의도. ClassVar 강제 안 함.
+    "RUF012", # mutable-class-default
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S", "B011", "ASYNC"]   # 테스트는 보안/어설션 완화
+# 테스트는 보안/어설션 완화 + sys.path 설정상 E402, pytest.raises/스타일 완화
+"tests/**/*.py" = ["S", "B011", "ASYNC", "E402", "B017", "RUF005", "RUF043", "SIM117"]
 "app/agentic/scenario_compiler.py" = ["E402"]  # 선언적 import 순서
+# 모듈 상단 코드(상수/함수) 뒤에 선언적 import 배치 — 의도된 순서
+"app/api/v1/routers/scenarios.py" = ["E402"]
+"app/api/v1/routers/auth_portal.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

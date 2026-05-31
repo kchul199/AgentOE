@@ -35,15 +35,16 @@ Session Finite State Machine (FSM) for voice call lifecycle.
     KILL_SWITCH_TRIGGERED — Kill Switch 발동 감지
     VENDOR_DEGRADED    — AI 벤더 장애 감지
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import ClassVar
 
 
-class SessionState(str, Enum):
+class SessionState(StrEnum):
     # 핵심 통화 상태
     IDLE = "IDLE"
     LISTENING = "LISTENING"
@@ -53,33 +54,35 @@ class SessionState(str, Enum):
     RESPONDING = "RESPONDING"
 
     # 상담사 이관 상태
-    TRANSFER_REQUESTED = "TRANSFER_REQUESTED"   # AI→상담사 이관 요청됨
-    TRANSFER_ACCEPTED = "TRANSFER_ACCEPTED"     # 상담사 수락 — 이관 완료
-    TRANSFER_FAILED = "TRANSFER_FAILED"         # 이관 실패 (상담사 없음 등)
+    TRANSFER_REQUESTED = "TRANSFER_REQUESTED"  # AI→상담사 이관 요청됨
+    TRANSFER_ACCEPTED = "TRANSFER_ACCEPTED"  # 상담사 수락 — 이관 완료
+    TRANSFER_FAILED = "TRANSFER_FAILED"  # 이관 실패 (상담사 없음 등)
 
     # 종료
     ENDED = "ENDED"
 
 
-class SessionEventType(str, Enum):
+class SessionEventType(StrEnum):
     """FSM 상태 전이가 아닌 오버레이 이벤트 (운영 감사용)."""
+
     STATE_CHANGED = "STATE_CHANGED"
     CALLBACK_SCHEDULED = "CALLBACK_SCHEDULED"
     TOOL_TIMEOUT = "TOOL_TIMEOUT"
     POLICY_BLOCKED = "POLICY_BLOCKED"
     KILL_SWITCH_TRIGGERED = "KILL_SWITCH_TRIGGERED"
     VENDOR_DEGRADED = "VENDOR_DEGRADED"
-    SESSION_RESTORED = "SESSION_RESTORED"       # 재연결 시 복구
-    TRANSFER_QUEUED = "TRANSFER_QUEUED"         # CTI 큐에 전달됨
+    SESSION_RESTORED = "SESSION_RESTORED"  # 재연결 시 복구
+    TRANSFER_QUEUED = "TRANSFER_QUEUED"  # CTI 큐에 전달됨
 
 
 @dataclass
 class SessionEvent:
     """단일 FSM 이벤트 기록."""
+
     event_type: SessionEventType
     from_state: SessionState | None
     to_state: SessionState | None
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict = field(default_factory=dict)
 
 
@@ -138,7 +141,7 @@ class SessionFSM:
             SessionState.ENDED,
         },
         SessionState.TRANSFER_FAILED: {
-            SessionState.LISTENING,   # 이관 실패 → AI가 다시 응대
+            SessionState.LISTENING,  # 이관 실패 → AI가 다시 응대
             SessionState.ENDED,
         },
         SessionState.ENDED: set(),
@@ -169,12 +172,14 @@ class SessionFSM:
             )
         previous = self.state
         self.state = to
-        self._events.append(SessionEvent(
-            event_type=SessionEventType.STATE_CHANGED,
-            from_state=previous,
-            to_state=to,
-            metadata=metadata or {},
-        ))
+        self._events.append(
+            SessionEvent(
+                event_type=SessionEventType.STATE_CHANGED,
+                from_state=previous,
+                to_state=to,
+                metadata=metadata or {},
+            )
+        )
         return previous
 
     # ── 오버레이 이벤트 기록 (상태 변경 없음) ──────────────────────────────────
@@ -185,12 +190,14 @@ class SessionFSM:
         metadata: dict | None = None,
     ) -> None:
         """FSM 상태 전이 없이 운영 이벤트를 히스토리에 추가."""
-        self._events.append(SessionEvent(
-            event_type=event_type,
-            from_state=self.state,
-            to_state=None,
-            metadata=metadata or {},
-        ))
+        self._events.append(
+            SessionEvent(
+                event_type=event_type,
+                from_state=self.state,
+                to_state=None,
+                metadata=metadata or {},
+            )
+        )
 
     # ── 직렬화 / 역직렬화 (재연결 복구용) ─────────────────────────────────────
 
@@ -211,18 +218,20 @@ class SessionFSM:
         }
 
     @classmethod
-    def from_snapshot(cls, snapshot: dict) -> "SessionFSM":
+    def from_snapshot(cls, snapshot: dict) -> SessionFSM:
         """Redis/MongoDB 스냅샷에서 FSM 복원."""
         state = SessionState(snapshot.get("state", SessionState.IDLE.value))
         fsm = cls(initial_state=state)
         for raw in snapshot.get("events", []):
-            fsm._events.append(SessionEvent(
-                event_type=SessionEventType(raw["event_type"]),
-                from_state=SessionState(raw["from_state"]) if raw.get("from_state") else None,
-                to_state=SessionState(raw["to_state"]) if raw.get("to_state") else None,
-                timestamp=datetime.fromisoformat(raw["timestamp"]),
-                metadata=raw.get("metadata", {}),
-            ))
+            fsm._events.append(
+                SessionEvent(
+                    event_type=SessionEventType(raw["event_type"]),
+                    from_state=SessionState(raw["from_state"]) if raw.get("from_state") else None,
+                    to_state=SessionState(raw["to_state"]) if raw.get("to_state") else None,
+                    timestamp=datetime.fromisoformat(raw["timestamp"]),
+                    metadata=raw.get("metadata", {}),
+                )
+            )
         fsm.record_event(SessionEventType.SESSION_RESTORED, {"restored_from": "snapshot"})
         return fsm
 

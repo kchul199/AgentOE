@@ -5,6 +5,7 @@ CLAUDE.md 원칙:
   - Latency is King — 테스트는 외부 I/O 없이 in-memory 로 완결
   - Graceful Fallback — services 의 실패 케이스도 픽스처에서 재현 가능해야 함
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -55,6 +56,7 @@ def mock_intent_client() -> AsyncMock:
 @pytest.fixture
 def mock_tool_registry() -> MagicMock:
     """Tool 레지스트리 스텁 — 모든 tool_name 은 echo(동일 입력 반환)."""
+
     async def _echo(**kwargs: Any) -> dict[str, Any]:
         return {"ok": True, "echoed": kwargs}
 
