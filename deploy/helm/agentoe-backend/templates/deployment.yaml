@@ -81,6 +81,13 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            # N1.12 — uvicorn --limit-concurrency (SSE 연결 포함 1차 방어).
+            # 0 = 무제한 (기본). values.yaml 의 container.limitConcurrency 로 오버라이드.
+            - name: UVICORN_LIMIT_CONCURRENCY
+              value: {{ .Values.container.limitConcurrency | default "0" | quote }}
+            # uvicorn worker 수도 values 에서 일관 관리.
+            - name: UVICORN_WORKERS
+              value: {{ .Values.container.workers | quote }}
             # Mongo / Redis URI 는 endpoints + secrets 조합. 컨테이너 안에서 entrypoint 가 합성하도록
             # 또는 templating 으로 직접 조립. 보안상 secret-only 부분 명시 분리.
             - name: REDIS_URL

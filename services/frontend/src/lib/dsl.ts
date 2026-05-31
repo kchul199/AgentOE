@@ -42,6 +42,8 @@ export interface BuilderGraph {
 
 export function defaultNodeConfig(type: NodeType): ScenarioNode["config"] {
   switch (type) {
+    case "start":
+      return { trigger_type: "inbound_call", greeting_message: null };
     case "intent":
       return { labels: ["billing", "default"], model: "groq-llama-3.3-70b", threshold: 0.5 };
     case "llm":
@@ -147,9 +149,14 @@ export function fromGraph(input: FromGraphInput): Scenario {
     label: e.data?.label ?? undefined,
   }));
 
+  // start 노드가 존재하면 entry 를 자동으로 그 id 로 덮어씌운다.
+  const startNode = nodes.find((n) => n.type === "start");
+  const resolvedEntry = startNode ? startNode.id : (meta as Partial<Scenario>).entry ?? "";
+
   // 기본값 채우기 후 zod 검증까지 통과시킨다.
   const draft = {
     ...meta,
+    entry: resolvedEntry,
     nodes,
     edges,
   };
@@ -190,6 +197,32 @@ export function validateGraph(scenario: Scenario): GraphValidationIssue[] {
       });
     }
     idSet.add(n.id);
+  }
+
+  // start 노드 존재 및 단일성 검증
+  const startNodes = scenario.nodes.filter((n) => n.type === "start");
+  if (startNodes.length === 0) {
+    issues.push({
+      severity: "error",
+      code: "START_NODE_MISSING",
+      message: "시나리오에 Start 노드가 없습니다. 팔레트에서 Start 노드를 추가하세요.",
+    });
+  } else if (startNodes.length > 1) {
+    issues.push({
+      severity: "error",
+      code: "START_NODE_DUPLICATE",
+      message: `Start 노드가 ${startNodes.length}개입니다. 정확히 1개만 허용됩니다.`,
+    });
+  }
+
+  // end 노드 존재 검증
+  const endNodes = scenario.nodes.filter((n) => n.type === "end");
+  if (endNodes.length === 0) {
+    issues.push({
+      severity: "error",
+      code: "END_NODE_MISSING",
+      message: "시나리오에 End 노드가 없습니다. 반드시 1개 이상 추가하세요.",
+    });
   }
 
   if (!idSet.has(scenario.entry)) {

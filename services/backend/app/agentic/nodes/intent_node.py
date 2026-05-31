@@ -6,12 +6,14 @@ Intent Node — 사용자 입력을 사전 정의된 라벨 중 하나로 분류
     * Groq 전용: temperature=0, max_tokens=32
     * 실패 시 intent='unknown', confidence=0, fallback_triggered=True
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import time
-from typing import Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import structlog
 

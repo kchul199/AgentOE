@@ -1,0 +1,197 @@
+# ──────────────────────────────────────────────────────────────────────────
+# agentoe-portal — 통합 운영 포탈 (nginx SPA + /api 프록시)
+#
+# 핵심 설계:
+#   1) Internal ALB only — scheme: internal (외부 인터넷 차단, VPN/Direct Connect 필수)
+#   2) nginx 가 /api/* → agentoe-backend 서비스로 프록시 (BACKEND_UPSTREAM ConfigMap 주입)
+#   3) SSE /api/v1/stream/* — proxy_buffering off (실시간 이벤트 스트림)
+#   4) namespace: portal (운영자 전용 격리)
+#   5) Stateless SPA — rolling update 자유, maxUnavailable=0 (zero-downtime)
+# ──────────────────────────────────────────────────────────────────────────
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: REPLACE_ECR/agentoe-staging/ops-portal
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: agentoe-portal
+
+affinity: {}
+nodeSelector: {}
+tolerations: []
+
+container:
+  port: 8080    # nginx-unprivileged 기본 포트
+
+# ── Probe ──────────────────────────────────────────────────────────────────
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 1
+  periodSeconds: 2
+  timeoutSeconds: 2
+  failureThreshold: 15
+
+terminationGracePeriodSeconds: 30
+lifecycle:
+  preStop:
+    exec:
+      command: ["/bin/sh", "-c", "sleep 5"]   # ALB deregistration grace
+
+# ── Resources ─────────────────────────────────────────────────────────────
+# 포탈은 운영자 트래픽 — 부하 낮음, 리소스 최소화.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# ── HPA ───────────────────────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6        # 포탈은 운영자 전용 — 많은 복제본 불필요
+  targetCPUUtilizationPercentage: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 0
+
+# ── PDB ───────────────────────────────────────────────────────────────────
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# ── Service ───────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+# ── Ingress (internal ALB) ────────────────────────────────────────────────
+# scheme: internal — VPN / Direct Connect 통해서만 접근.
+# 운영자 CIDR 제한은 ALB Security Group (terraform) 에서 관리.
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal              # ★ internal ALB
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}, {"HTTP":80}]'
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/success-codes: "200"
+    alb.ingress.kubernetes.io/group.name: agentoe-internal  # internal ALB 전용 그룹
+    alb.ingress.kubernetes.io/group.order: "100"
+    alb.ingress.kubernetes.io/certificate-arn: ""           # staging/prod values 에서 override
+    # SSE 유지를 위해 ALB idle timeout 연장 (default 60s → 3600s)
+    alb.ingress.kubernetes.io/load-balancer-attributes: >-
+      idle_timeout.timeout_seconds=3600
+  hosts:
+    - host: portal.agentoe.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+# ── Backend 프록시 설정 ───────────────────────────────────────────────────
+# nginx.conf 의 ${BACKEND_UPSTREAM} 을 docker-entrypoint.sh 가 치환.
+# k8s Service DNS: http://<release-name>.<namespace>.svc.cluster.local
+backendUpstream: "http://agentoe-backend.default.svc.cluster.local"
+
+# ── ServiceAccount ────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ── Security Context ──────────────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101        # nginx-unprivileged 표준 UID
+  runAsGroup: 101
+  fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# ── emptyDir Volumes (readOnlyRootFilesystem 호환) ────────────────────────
+# nginx 이 /var/cache/nginx, /var/run, /tmp, /etc/nginx/conf.d 에 쓰기 필요.
+extraVolumes:
+  - name: cache
+    emptyDir: {}
+  - name: run
+    emptyDir: {}
+  - name: tmp
+    emptyDir: {}
+  - name: nginx-confd
+    emptyDir: {}          # docker-entrypoint.sh 가 렌더된 default.conf 여기에 기록
+
+extraVolumeMounts:
+  - name: cache
+    mountPath: /var/cache/nginx
+  - name: run
+    mountPath: /var/run
+  - name: tmp
+    mountPath: /tmp
+  - name: nginx-confd
+    mountPath: /etc/nginx/conf.d
+
+# ── nginx.conf 런타임 렌더 옵션 ──────────────────────────────────────────
+# true 이면 Helm values.yaml 의 nginxConfig.data 로 ConfigMap 을 생성해 기본 conf override.
+nginxConfig:
+  enabled: false
+  data: ""
+
+# ── 추가 env / envFrom ────────────────────────────────────────────────────
+extraEnv: []
+extraEnvFrom: []
+
+priorityClassName: ""

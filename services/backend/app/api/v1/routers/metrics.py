@@ -13,12 +13,13 @@ Metrics & Monitoring API
   - /prometheus: 인증 불필요 (Prometheus scraper 접근용)
   - 나머지: JWT 필요 (operator 이상)
 """
+
 from __future__ import annotations
 
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
 
 from app.core.auth import TenantContext, get_current_tenant
@@ -26,7 +27,6 @@ from app.core.metrics import (
     generate_prometheus_metrics,
     get_active_sessions,
     get_all_metrics,
-    get_circuit_breaker_gauges,
     get_pipeline_stats,
     get_transfer_stats,
 )
@@ -38,6 +38,7 @@ router = APIRouter()
 
 
 # ── 파이프라인 레이턴시 ────────────────────────────────────────────────────────
+
 
 @router.get("/pipeline")
 async def pipeline_metrics(
@@ -87,6 +88,7 @@ async def pipeline_metrics(
 
 # ── 세션 KPI ───────────────────────────────────────────────────────────────────
 
+
 @router.get("/sessions")
 async def session_metrics(
     tenant: Annotated[TenantContext, Depends(get_current_tenant)],
@@ -107,6 +109,7 @@ async def session_metrics(
 
 
 # ── AI 서비스 (Circuit Breaker) ────────────────────────────────────────────────
+
 
 @router.get("/ai")
 async def ai_metrics(
@@ -140,6 +143,7 @@ async def ai_metrics(
 
 # ── 이관 통계 ──────────────────────────────────────────────────────────────────
 
+
 @router.get("/transfers")
 async def transfer_metrics(
     tenant: Annotated[TenantContext, Depends(get_current_tenant)],
@@ -161,6 +165,7 @@ async def transfer_metrics(
 
 # ── 전체 통합 요약 ─────────────────────────────────────────────────────────────
 
+
 @router.get("/summary")
 async def metrics_summary(
     tenant: Annotated[TenantContext, Depends(get_current_tenant)],
@@ -178,6 +183,7 @@ async def metrics_summary(
 
 
 # ── Prometheus Scrape 엔드포인트 (인증 없음) ──────────────────────────────────
+
 
 @router.get("/prometheus", include_in_schema=False)
 async def prometheus_metrics() -> PlainTextResponse:

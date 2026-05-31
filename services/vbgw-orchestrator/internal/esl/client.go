@@ -173,7 +173,7 @@ func (c *Client) IsConnected() bool {
 // GetActiveChannelUUIDs queries FS for all active channel UUIDs.
 // Used after reconnection to reconcile orphan sessions.
 func (c *Client) GetActiveChannelUUIDs() (map[string]bool, error) {
-	resp, err := c.SendAPI("show channels")
+	resp, err := c.SendAPI(c.ctx, "show channels")
 	if err != nil {
 		return nil, err
 	}

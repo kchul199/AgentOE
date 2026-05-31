@@ -5,6 +5,7 @@ CLAUDE.md 원칙 준수 검증 포인트:
   - Tool/LLM 실패 시 fallback_triggered=True 로 graceful fallback
   - Latency 측정 필드 (turn_latency_ms) 가 기록됨
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -33,7 +34,6 @@ from app.agentic.scenario_dsl import (
     WaitNodeConfig,
 )
 from app.agentic.state import empty_state
-
 
 # ── End / Wait / Context (순수함수에 가까움) ────────────────────────────────
 
@@ -72,9 +72,7 @@ class TestContextNode:
         assert out["slots"]["plan"] == "pro"
 
     async def test_clear_slots_removes(self) -> None:
-        node = make_context_node(
-            ContextUpdateNodeConfig(clear_slots=["to_clear"])
-        )
+        node = make_context_node(ContextUpdateNodeConfig(clear_slots=["to_clear"]))
         state = empty_state("t", "s", "sc")
         state["slots"] = {"keep": "x", "to_clear": "y"}
         out = await node(state)
@@ -116,9 +114,7 @@ class TestBranchDispatcher:
         assert dispatch(state) == "fb"
 
     def test_slot_mode(self) -> None:
-        node = BranchNode(
-            id="router", config=BranchNodeConfig(mode="slot", slot_key="plan")
-        )
+        node = BranchNode(id="router", config=BranchNodeConfig(mode="slot", slot_key="plan"))
         edges = [
             Edge.model_validate({"from": "router", "when": "pro", "to": "pro_flow"}),
             Edge.model_validate({"from": "router", "when": "default", "to": "free_flow"}),
@@ -135,9 +131,7 @@ class TestBranchDispatcher:
     def test_expr_mode_contains(self) -> None:
         node = BranchNode(id="router", config=BranchNodeConfig(mode="expr"))
         edges = [
-            Edge.model_validate(
-                {"from": "router", "when": "contains:계좌", "to": "account"}
-            ),
+            Edge.model_validate({"from": "router", "when": "contains:계좌", "to": "account"}),
             Edge.model_validate({"from": "router", "when": "default", "to": "other"}),
         ]
         dispatch = make_branch_dispatcher(node, edges)
@@ -152,9 +146,7 @@ class TestBranchDispatcher:
     def test_expr_mode_regex(self) -> None:
         node = BranchNode(id="router", config=BranchNodeConfig(mode="expr"))
         edges = [
-            Edge.model_validate(
-                {"from": "router", "when": r"regex:\d{3,}", "to": "has_number"}
-            ),
+            Edge.model_validate({"from": "router", "when": r"regex:\d{3,}", "to": "has_number"}),
             Edge.model_validate({"from": "router", "when": "default", "to": "no_num"}),
         ]
         dispatch = make_branch_dispatcher(node, edges)
@@ -243,9 +235,7 @@ class TestIntentNode:
         fake_resp = SimpleNamespace(
             choices=[
                 SimpleNamespace(
-                    message=SimpleNamespace(
-                        content='{"intent": "billing", "confidence": 0.1}'
-                    )
+                    message=SimpleNamespace(content='{"intent": "billing", "confidence": 0.1}')
                 )
             ]
         )
@@ -267,9 +257,7 @@ class TestIntentNode:
         """LLM 클라이언트가 예외 던져도 CLAUDE.md 원칙대로 fallback."""
         client = SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=AsyncMock(side_effect=RuntimeError("boom"))
-                )
+                completions=SimpleNamespace(create=AsyncMock(side_effect=RuntimeError("boom")))
             )
         )
         node = make_intent_node(
@@ -343,9 +331,7 @@ class TestToolNode:
             raise RuntimeError("boom")
 
         node = make_tool_node(
-            ToolNodeConfig(
-                tool_name="bad", timeout_s=1.0, retry=0, on_error="raise"
-            ),
+            ToolNodeConfig(tool_name="bad", timeout_s=1.0, retry=0, on_error="raise"),
             lambda name: bad_tool,
         )
         with pytest.raises(RuntimeError, match="Tool failure"):
@@ -356,9 +342,7 @@ class TestToolNode:
             raise RuntimeError("boom")
 
         node = make_tool_node(
-            ToolNodeConfig(
-                tool_name="bad", timeout_s=1.0, retry=0, on_error="continue"
-            ),
+            ToolNodeConfig(tool_name="bad", timeout_s=1.0, retry=0, on_error="continue"),
             lambda name: bad_tool,
         )
         out = await node(empty_state("t", "s", "sc"))
@@ -398,9 +382,7 @@ class TestLLMNode:
     async def test_circuit_breaker_open_yields_polite_wait(self) -> None:
         from app.domain.circuit_breaker import CircuitBreakerOpenError
 
-        service = SimpleNamespace(
-            complete=AsyncMock(side_effect=CircuitBreakerOpenError("open"))
-        )
+        service = SimpleNamespace(complete=AsyncMock(side_effect=CircuitBreakerOpenError("open")))
         node = make_llm_node(
             LLMNodeConfig(system_prompt="k", streaming=False),
             lambda: service,
@@ -412,9 +394,7 @@ class TestLLMNode:
         assert out["errors"][0]["reason"] == "CircuitBreakerOpen"
 
     async def test_arbitrary_exception_yields_graceful_fallback(self) -> None:
-        service = SimpleNamespace(
-            complete=AsyncMock(side_effect=RuntimeError("boom"))
-        )
+        service = SimpleNamespace(complete=AsyncMock(side_effect=RuntimeError("boom")))
         node = make_llm_node(
             LLMNodeConfig(system_prompt="k", streaming=False),
             lambda: service,
@@ -440,9 +420,7 @@ class TestTransferNode:
         assert "상담원" in out["assistant_output"]
 
     async def test_client_failure_still_ends_gracefully(self) -> None:
-        client = SimpleNamespace(
-            request_transfer=AsyncMock(side_effect=RuntimeError("gRPC down"))
-        )
+        client = SimpleNamespace(request_transfer=AsyncMock(side_effect=RuntimeError("gRPC down")))
         node = make_transfer_node(
             TransferNodeConfig(queue="q1"),
             transfer_client_factory=lambda: client,

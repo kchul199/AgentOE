@@ -1,0 +1,330 @@
+name: Portal Build & Publish
+
+# ops-portal 전용 CI/CD 워크플로 (Phase N — N3.3 / N5.3).
+#
+# 트리거:
+#   - PR / main 머지: portal-lint (tsc), hadolint, helm-lint-portal → portal-gate
+#   - main 머지 / tag push: 위 3개 통과 후 ECR 이미지 빌드 & 푸시
+#   - v* 태그 push: portal-prod-deploy 추가 (GitHub Environment 'production' 승인 게이트)
+#   - workflow_dispatch: 수동 빌드 (이미지 태그: sha)
+#
+# 연관 워크플로:
+#   validate.yml  — deploy/helm/agentoe-portal 변경 시 helm-lint 포함
+#   build-images.yml — 나머지 서비스(backend/vbgw/…) 담당
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+    paths:
+      - "services/ops-portal/**"
+      - "deploy/helm/agentoe-portal/**"
+      - "deploy/helm/values/*/portal.values.yaml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "services/ops-portal/**"
+      - "deploy/helm/agentoe-portal/**"
+      - "deploy/helm/values/*/portal.values.yaml"
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: "ECR 푸시 여부 (true/false)"
+        required: false
+        default: "true"
+
+permissions:
+  id-token: write   # OIDC → AWS
+  contents: read
+  security-events: write   # SARIF upload
+
+concurrency:
+  group: portal-${{ github.ref }}
+  cancel-in-progress: true   # PR 에 새 커밋이 오면 이전 실행 취소
+
+# ── 1. TypeScript lint & type check ────────────────────────────────────────────
+jobs:
+  portal-lint:
+    name: Portal TS lint & type check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ops-portal
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: services/ops-portal/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: TypeScript type check (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: ESLint (errors 만 차단, warnings 허용)
+        # eslint 미설치 환경 대비 — 설정 없으면 skip
+        run: |
+          if [ -f .eslintrc* ] || [ -f eslint.config* ]; then
+            npx eslint src/ --ext .ts,.tsx --max-warnings 999
+          else
+            echo "No ESLint config found — skipping"
+          fi
+
+# ── 2. Dockerfile lint (Hadolint) ─────────────────────────────────────────────
+  hadolint-portal:
+    name: Hadolint (ops-portal Dockerfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: services/ops-portal/Dockerfile
+          failure-threshold: warning
+          ignore: DL3008,DL3018   # apt/apk 버전 핀닝 — 베이스 이미지 이미 핀
+
+# ── 3. Helm lint + manifest render × {staging, prod} ─────────────────────────
+  helm-lint-portal:
+    name: Helm lint agentoe-portal (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [staging, prod]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-helm
+
+      - name: helm lint
+        working-directory: deploy/helm
+        run: |
+          helm lint ./agentoe-portal \
+            -f "values/${{ matrix.env }}/portal.values.yaml"
+
+      - name: helm template (manifest 렌더 — 클러스터 없음)
+        working-directory: deploy/helm
+        run: |
+          helm template "agentoe-portal-${{ matrix.env }}" ./agentoe-portal \
+            -f "values/${{ matrix.env }}/portal.values.yaml" \
+            --debug > /tmp/portal-render-${{ matrix.env }}.yaml
+          echo "Rendered $(wc -l < /tmp/portal-render-${{ matrix.env }}.yaml) lines"
+
+      - name: kubeconform (CRD-aware schema 검증)
+        run: |
+          KCV=v0.6.7
+          curl -sLO "https://github.com/yannh/kubeconform/releases/download/${KCV}/kubeconform-linux-amd64.tar.gz"
+          tar xzf kubeconform-linux-amd64.tar.gz
+          ./kubeconform -strict -ignore-missing-schemas \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            /tmp/portal-render-${{ matrix.env }}.yaml
+
+# ── 4. Docker 빌드 + ECR 푸시 (PR 제외 / lint gate 통과 후) ─────────────────
+  portal-docker:
+    name: Build & Push ops-portal image
+    needs: [portal-lint, hadolint-portal, helm-lint-portal]
+    # PR 에서는 빌드만, main/tag/dispatch 에서는 push 까지
+    if: |
+      always() &&
+      needs.portal-lint.result == 'success' &&
+      needs.hadolint-portal.result == 'success' &&
+      needs.helm-lint-portal.result == 'success' &&
+      github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag & ECR prefix
+        id: tag
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            PREFIX="${{ vars.ECR_PREFIX_PROD }}"
+          else
+            TAG="$(git rev-parse --short=12 HEAD)"
+            PREFIX="${{ vars.ECR_PREFIX_STAGING }}"
+          fi
+          echo "image_tag=$TAG"   >> "$GITHUB_OUTPUT"
+          echo "ecr_prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+
+      - name: Skip push? (workflow_dispatch override)
+        id: skip
+        run: |
+          PUSH="${{ inputs.push_image }}"
+          [[ -z "$PUSH" ]] && PUSH="true"
+          echo "push=$PUSH" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-aws-oidc
+        if: steps.skip.outputs.push == 'true'
+        with:
+          role-arn:   ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: ./.github/actions/ecr-build-push
+        id: push
+        if: steps.skip.outputs.push == 'true'
+        with:
+          service:      ops-portal
+          context:      services/ops-portal
+          ecr-registry: ${{ vars.ECR_REGISTRY }}
+          ecr-prefix:   ${{ steps.tag.outputs.ecr_prefix }}
+          image-tag:    ${{ steps.tag.outputs.image_tag }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+      # push 스킵 시에도 빌드만은 검증 (캐시 활용)
+      - name: Build only (push skipped)
+        if: steps.skip.outputs.push != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: services/ops-portal
+          dockerfile: services/ops-portal/Dockerfile
+          push: false
+          tags: ops-portal:ci-check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Job summary
+        if: steps.skip.outputs.push == 'true' && steps.push.outputs.image != ''
+        run: |
+          {
+            echo "## ops-portal image pushed"
+            echo "| 항목 | 값 |"
+            echo "|---|---|"
+            echo "| image | \`${{ steps.push.outputs.image }}\` |"
+            echo "| digest | \`${{ steps.push.outputs.digest }}\` |"
+            echo "| tag | \`${{ steps.tag.outputs.image_tag }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+# ── 5. Trivy 이미지 취약점 스캔 (push 완료 후) ───────────────────────────────
+  portal-scan:
+    name: Trivy image scan (ops-portal)
+    needs: portal-docker
+    if: |
+      always() &&
+      needs.portal-docker.result == 'success' &&
+      needs.portal-docker.outputs.image != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-aws-oidc
+        with:
+          role-arn:   ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ${{ needs.portal-docker.outputs.image }}
+          format: sarif
+          output: trivy-portal.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"   # 취약점 발견 시 경고만 (차단 X)
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-portal.sarif
+          category: trivy-portal
+
+# ── 6. Portal gate — PR branch protection 에 등록 ────────────────────────────
+  portal-gate:
+    name: Portal gate
+    needs: [portal-lint, hadolint-portal, helm-lint-portal]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate results
+        run: |
+          fail=0
+          [[ "${{ needs.portal-lint.result }}"      == "failure" ]] && fail=1
+          [[ "${{ needs.hadolint-portal.result }}"  == "failure" ]] && fail=1
+          [[ "${{ needs.helm-lint-portal.result }}" == "failure" ]] && fail=1
+          if [[ $fail -eq 1 ]]; then
+            echo "::error::portal-gate failed — 위 job 결과를 확인하세요"
+            exit 1
+          fi
+          echo "Portal gate passed ✓"
+
+# ── 7. Prod 배포 게이트 (N5.3) — v* 태그 push 전용 ───────────────────────────
+#
+# GitHub Environment 'production' 에 등록된 required reviewer 의 승인 후 실행.
+# Canary 10% → 50% → 100% + Prometheus error_rate gate.
+  portal-prod-deploy:
+    name: Deploy ops-portal to production
+    needs: [portal-docker, portal-scan]
+    # v* 태그 push 이고 docker/scan 이 모두 성공한 경우에만
+    if: |
+      always() &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref, 'refs/tags/v') &&
+      needs.portal-docker.result == 'success' &&
+      needs.portal-scan.result == 'success'
+    runs-on: ubuntu-latest
+    # GitHub Environment 'production' — required reviewer 승인 게이트
+    environment:
+      name: production
+      url: https://portal.agentoe.io
+    concurrency:
+      group: portal-prod-deploy
+      cancel-in-progress: false   # prod 배포는 취소하지 않음
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-aws-oidc
+        with:
+          role-arn:   ${{ vars.AWS_ECR_PROD_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup kubectl (prod kubeconfig)
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ vars.EKS_CLUSTER_NAME_PROD }}" \
+            --region "${{ vars.AWS_REGION }}" \
+            --alias prod
+
+      - uses: ./.github/actions/setup-helm
+
+      - name: helm lint (prod 최종 확인)
+        run: |
+          helm lint deploy/helm/agentoe-portal \
+            -f deploy/helm/values/prod/portal.values.yaml
+
+      - name: Prod 배포 (5단계 게이트)
+        env:
+          ECR_REGISTRY:      ${{ vars.ECR_REGISTRY }}
+          AWS_REGION:        ${{ vars.AWS_REGION }}
+          PORTAL_HOSTNAME:   ${{ vars.PORTAL_HOSTNAME_PROD }}
+          STAGING_HOSTNAME:  ${{ vars.PORTAL_HOSTNAME_STAGING }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          PD_API_KEY:        ${{ secrets.PAGERDUTY_API_KEY }}
+          PROMETHEUS_URL:    ${{ vars.PROMETHEUS_URL_PROD }}
+        run: |
+          ./scripts/portal_prod_deploy.sh \
+            --image-tag "${{ needs.portal-docker.outputs.image_tag }}" \
+            --auto-approve
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          {
+            echo "## ✅ agentoe-portal prod 배포 완료"
+            echo "| 항목 | 값 |"
+            echo "|---|---|"
+            echo "| 이미지 태그 | \`${{ needs.portal-docker.outputs.image_tag }}\` |"
+            echo "| Digest | \`${{ needs.portal-docker.outputs.digest }}\` |"
+            echo "| URL | https://portal.agentoe.io |"
+            echo "| 배포자 | ${{ github.actor }} |"
+            echo "| 시각 | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+          } >> "$GITHUB_STEP_SUMMARY"

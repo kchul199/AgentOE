@@ -2,7 +2,6 @@ package ai
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"log/slog"
 	"github.com/kchul199/agentoe/services/vbgw-ai/internal/config"
@@ -74,7 +73,8 @@ func (s *Server) StreamSession(stream pb.VoicebotAiService_StreamSessionServer) 
 
 // sendInitialGreeting: 세션 시작 시 최초 인사말 송출
 func (s *Server) sendInitialGreeting(stream pb.VoicebotAiService_StreamSessionServer, sessionID string) {
-	ctx := context.Background()
+	// 통화(스트림)가 끊기면 TTS 합성/전송이 자동 취소되도록 stream 컨텍스트를 파생한다.
+	ctx := stream.Context()
 	greetingText := config.AppConfig.OpenAI.GreetingMsg
 	if greetingText == "" {
 		greetingText = "안녕하세요, 보이스봇입니다. 무엇을 도와드릴까요?"
@@ -92,14 +92,22 @@ func (s *Server) sendInitialGreeting(stream pb.VoicebotAiService_StreamSessionSe
 	audioResponse := Resample24To16(raw24kAudio)
 	chunkSize := 640
 	for i := 0; i < len(audioResponse); i += chunkSize {
+		// 통화가 이미 끊겼으면 남은 청크 전송을 중단 (불필요한 작업/지연 방지)
+		if ctx.Err() != nil {
+			slog.Info("Greeting aborted — stream closed", "session_id", sessionID)
+			return
+		}
 		end := i + chunkSize
 		if end > len(audioResponse) {
 			end = len(audioResponse)
 		}
-		stream.Send(&pb.AiResponse{
+		if err := stream.Send(&pb.AiResponse{
 			Type:      pb.AiResponse_TTS_AUDIO,
 			AudioData: audioResponse[i:end],
-		})
+		}); err != nil {
+			slog.Warn("Greeting send failed — stream closed", "session_id", sessionID, "err", err)
+			return
+		}
 	}
 	slog.Info("Initial greeting sent", "session_id", sessionID)
 }
@@ -121,7 +129,8 @@ func (s *Server) sendCushionPhrase(stream pb.VoicebotAiService_StreamSessionServ
 
 // processAIResponse: STT -> LLM -> TTS 파이프라인 실행
 func (s *Server) processAIResponse(stream pb.VoicebotAiService_StreamSessionServer, sessionID string, pcmData []byte) {
-	ctx := context.Background()
+	// 통화(스트림) 종료 시 STT/LLM/TTS 호출이 전파되어 취소되도록 stream 컨텍스트 사용.
+	ctx := stream.Context()
 
 	slog.Info("Starting AI pipeline", "session_id", sessionID, "pcm_size", len(pcmData))
 
@@ -168,21 +177,32 @@ func (s *Server) processAIResponse(stream pb.VoicebotAiService_StreamSessionServ
 	// 16kHz Mono 16bit = 32000 bytes/sec. 20ms = 640 bytes.
 	chunkSize := 640
 	for i := 0; i < len(audioResponse); i += chunkSize {
+		// 통화가 이미 끊겼으면 남은 청크 전송을 중단 (불필요한 작업/지연 방지)
+		if ctx.Err() != nil {
+			slog.Info("AI response aborted — stream closed", "session_id", sessionID)
+			return
+		}
 		end := i + chunkSize
 		if end > len(audioResponse) {
 			end = len(audioResponse)
 		}
-		
-		stream.Send(&pb.AiResponse{
+
+		if err := stream.Send(&pb.AiResponse{
 			Type:      pb.AiResponse_TTS_AUDIO,
 			AudioData: audioResponse[i:end],
-		})
+		}); err != nil {
+			slog.Warn("TTS send failed — stream closed", "session_id", sessionID, "err", err)
+			return
+		}
 	}
 
 	// 전송 완료 신호
-	stream.Send(&pb.AiResponse{
+	if err := stream.Send(&pb.AiResponse{
 		Type: pb.AiResponse_END_OF_TURN,
-	})
+	}); err != nil {
+		slog.Warn("END_OF_TURN send failed", "session_id", sessionID, "err", err)
+		return
+	}
 	slog.Info("AI Turn completed and audio sent", "session_id", sessionID)
 }
 

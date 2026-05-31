@@ -17,12 +17,14 @@ SLO 측정용 4개 시리즈를 노출한다:
   4. prometheus_client 미설치 환경 (개발) 에서는 no-op — import 실패 안 남.
   5. WebSocket upgrade (/api/v1/ws/*) 는 별도 처리 — 여기서 timing 잡으면 의미 없음.
 """
+
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import Final
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
@@ -55,14 +57,16 @@ except ImportError:  # pragma: no cover
 
 
 # 측정 제외 경로 — operational, SLO 분모 오염 금지.
-_SKIP_PATHS: Final[frozenset[str]] = frozenset({
-    "/api/v1/livez",
-    "/api/v1/readyz",
-    "/api/v1/livez/drain",
-    "/api/v1/metrics/prometheus",
-    "/metrics",
-    "/api/v1/health",
-})
+_SKIP_PATHS: Final[frozenset[str]] = frozenset(
+    {
+        "/api/v1/livez",
+        "/api/v1/readyz",
+        "/api/v1/livez/drain",
+        "/api/v1/metrics/prometheus",
+        "/metrics",
+        "/api/v1/health",
+    }
+)
 
 # WebSocket 경로 prefix — 별도 measurement 가 더 의미 있음 (active_sessions Gauge 가 이미 있음)
 _WS_PREFIX = "/api/v1/ws"
@@ -93,7 +97,7 @@ class HTTPMetricsMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
 
         # 비측정 경로는 통과 — overhead 0
@@ -108,14 +112,12 @@ class HTTPMetricsMiddleware(BaseHTTPMiddleware):
         response: Response | None = None
         try:
             response = await call_next(request)
-            return response
+            return response  # type: ignore[return-value]
         finally:
             elapsed = time.perf_counter() - start
             route = _resolve_route_template(request)
-            status = str(response.status_code if response is not None else 500)
-            try:
+            status = str(response.status_code if response is not None else 500)  # type: ignore[union-attr]
+            # 메트릭 기록 실패가 요청 자체를 깨선 안 됨.
+            with contextlib.suppress(Exception):
                 _HTTP_REQUESTS.labels(method=method, route=route, status=status).inc()
                 _HTTP_DURATION.labels(method=method, route=route).observe(elapsed)
-            except Exception:  # noqa: BLE001
-                # 메트릭 기록 실패가 요청 자체를 깨선 안 됨.
-                pass

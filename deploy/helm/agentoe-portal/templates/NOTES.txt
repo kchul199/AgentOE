@@ -1,0 +1,21 @@
+AgentOE 통합 운영 포탈이 배포되었습니다.
+
+1. 접속 URL:
+{{- range .Values.ingress.hosts }}
+   https://{{ .host }}
+{{- end }}
+   ※ Internal ALB — VPN 또는 Direct Connect 경유 필수.
+
+2. Backend 프록시:
+   BACKEND_UPSTREAM = {{ .Values.backendUpstream }}
+   /api/v1/* → {{ .Values.backendUpstream }}/api/v1/*
+
+3. SSE 스트림 엔드포인트 (proxy_buffering off):
+   /api/v1/stream/metrics
+   /api/v1/stream/sessions.active
+   /api/v1/stream/audit.tail
+   /api/v1/stream/alerts
+
+4. 상태 확인:
+   kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "agentoe-portal.fullname" . }}
+   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/name={{ include "agentoe-portal.name" . }}

@@ -1,7 +1,8 @@
 """MongoDB repository for connectors collection."""
-from datetime import datetime, timezone
-from typing import Any
+
 import uuid
+from datetime import UTC, datetime
+from typing import Any
 
 from app.core.database import get_database
 from app.core.exceptions import AgentOEBaseError
@@ -10,21 +11,22 @@ from app.core.exceptions import AgentOEBaseError
 class ConnectorNotFoundError(AgentOEBaseError):
     http_status = 404
     code = "CONNECTOR_NOT_FOUND"
+
     def __init__(self, connector_id: str):
         super().__init__(f"Connector '{connector_id}' not found")
 
 
 class ConnectorRepository:
-    def __init__(self, db=None):
+    def __init__(self, db: Any = None) -> None:
         self._db = db
 
     @property
-    def col(self):
+    def col(self) -> Any:
         return (self._db or get_database())["connectors"]
 
     async def create(self, data: dict[str, Any]) -> dict[str, Any]:
         data.setdefault("connector_id", f"conn_{uuid.uuid4().hex[:12]}")
-        data["created_at"] = datetime.now(timezone.utc)
+        data["created_at"] = datetime.now(UTC)
         data.setdefault("enabled", True)
         data.setdefault("whitelist", [])
         await self.col.insert_one(data)
@@ -41,7 +43,7 @@ class ConnectorRepository:
         return await cursor.to_list(length=200)
 
     async def update(self, connector_id: str, update: dict[str, Any]) -> dict[str, Any]:
-        update["updated_at"] = datetime.now(timezone.utc)
+        update["updated_at"] = datetime.now(UTC)
         doc = await self.col.find_one_and_update(
             {"connector_id": connector_id},
             {"$set": update},

@@ -11,12 +11,25 @@ Scenario Compiler — DSL(Scenario) → LangGraph StateGraph
 LangGraph API 가 설치돼 있을 때만 실제 컴파일 가능.
 개발/테스트 환경에서 langgraph 가 없으면 ImportError 대신 DRY_RUN 모드로 구조만 검증한다.
 """
+
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
+from app.agentic.nodes import (
+    make_branch_node,
+    make_context_node,
+    make_end_node,
+    make_intent_node,
+    make_llm_node,
+    make_tool_node,
+    make_transfer_node,
+    make_wait_node,
+)
+from app.agentic.nodes.branch_node import make_branch_dispatcher
 from app.agentic.scenario_dsl import (
     BranchNode,
     ContextUpdateNode,
@@ -29,17 +42,6 @@ from app.agentic.scenario_dsl import (
     TransferNode,
     WaitNode,
 )
-from app.agentic.nodes import (
-    make_branch_node,
-    make_context_node,
-    make_end_node,
-    make_intent_node,
-    make_llm_node,
-    make_tool_node,
-    make_transfer_node,
-    make_wait_node,
-)
-from app.agentic.nodes.branch_node import make_branch_dispatcher
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +49,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class ServiceBundle:
     """컴파일 타임에 노드들에 주입되는 서비스 의존성."""
+
     llm_service_factory: Callable[[], Any]
     intent_client_factory: Callable[[], Any]
     tool_registry_getter: Callable[[str], Callable[..., Awaitable[Any]]]
@@ -57,6 +60,7 @@ class ServiceBundle:
 @dataclass
 class CompiledScenario:
     """컴파일된 결과. langgraph 미설치 시 graph=None."""
+
     scenario: Scenario
     graph: Any | None  # CompiledGraph
     node_count: int
@@ -69,6 +73,7 @@ def compile_scenario(scenario: Scenario, services: ServiceBundle) -> CompiledSce
     """DSL 시나리오를 LangGraph StateGraph 로 컴파일."""
     try:
         from langgraph.graph import END, StateGraph
+
         from app.agentic.state import CallbotState
     except ImportError:
         log.warning("langgraph not installed — dry-run compile only")
@@ -108,25 +113,23 @@ def compile_scenario(scenario: Scenario, services: ServiceBundle) -> CompiledSce
         else:
             raise ValueError(f"Unknown node type: {type(node).__name__}")
 
-        builder.add_node(node.id, fn)
+        builder.add_node(node.id, fn)  # type: ignore[call-overload]
 
     # ── 엣지 추가 ──────────────────────────────────────────────────────────
-    branch_node_ids = {n.id for n in scenario.nodes if isinstance(n, BranchNode)}
+    {n.id for n in scenario.nodes if isinstance(n, BranchNode)}
 
     for node in scenario.nodes:
         outgoing = branch_outgoing.get(node.id, [])
         if isinstance(node, BranchNode):
             dispatcher = make_branch_dispatcher(node, outgoing)
             # 매핑 dict: {when_value: target_node}
-            mapping = {
-                (e.when or "default"): e.to for e in outgoing
-            }
+            mapping = {(e.when or "default"): e.to for e in outgoing}
             # __end__ 는 END 와 매핑
             if "default" not in mapping and scenario.fallback_node:
                 mapping["default"] = scenario.fallback_node
             # add_conditional_edges는 mapping 을 함수 반환값 → 실제 노드 id로 변환
             # dispatcher는 이미 실제 노드 id 를 반환하므로 identity 매핑 사용
-            identity_mapping = {v: v for v in mapping.values()}
+            identity_mapping: dict[Any, str] = {v: v for v in mapping.values()}
             identity_mapping["__end__"] = END
             builder.add_conditional_edges(node.id, dispatcher, identity_mapping)
         elif isinstance(node, (TransferNode, EndNode)):
@@ -141,9 +144,7 @@ def compile_scenario(scenario: Scenario, services: ServiceBundle) -> CompiledSce
                 builder.add_edge(node.id, END)
             else:
                 # Branch가 아닌 노드에서 다중 엣지는 DSL 단에서 금지됨
-                raise ValueError(
-                    f"Non-branch node '{node.id}' has {len(outgoing)} outgoing edges"
-                )
+                raise ValueError(f"Non-branch node '{node.id}' has {len(outgoing)} outgoing edges")
 
     builder.set_entry_point(scenario.entry)
 

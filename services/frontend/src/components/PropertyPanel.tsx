@@ -1,11 +1,19 @@
 /**
  * 우측 속성 패널 — 선택된 노드의 config 를 편집한다.
  *
- * 편집은 data.dsl 을 얕은 복사로 갱신해 상위 (App.tsx) 로 전달.
- * 각 노드 타입별로 별도의 폼을 제공한다. LLM/Tool/Intent 가 자주 쓰이므로
- * 이들은 완전한 필드 세트, 나머지는 핵심 필드만.
+ * 개선 (Dark-Pro 리디자인):
+ *   - 인라인 style 제거 → CSS 클래스 기반
+ *   - Entry / Fallback 버튼 → .node-meta-btn
+ *   - checkbox → 토글 스위치 (CSS appearance:none)
+ *   - 빈 상태 empty 뷰
  */
-import type { ScenarioNode } from "@/types/scenario";
+import { paletteColor } from "@/lib/dsl";
+import type { NodeType, ScenarioNode } from "@/types/scenario";
+
+const NODE_ICONS: Record<NodeType, string> = {
+  start: "▶", intent: "◈", llm: "◉", tool: "⚙",
+  branch: "⑂", transfer: "⇝", wait: "◷", context: "≡", end: "■",
+};
 
 interface Props {
   node: ScenarioNode | null;
@@ -26,28 +34,32 @@ export default function PropertyPanel({
 }: Props): JSX.Element {
   if (!node) {
     return (
-      <div className="section">
-        <h2>노드 속성</h2>
-        <div style={{ fontSize: 13, color: "var(--fg-muted)" }}>
-          캔버스에서 노드를 선택하세요.
+      <div className="section props-empty">
+        <div className="props-empty-icon">◻</div>
+        <div className="props-empty-text">
+          캔버스에서 노드를 클릭하면<br />여기에 속성이 표시됩니다.
         </div>
       </div>
     );
   }
 
-  const update = (patch: Partial<ScenarioNode>) => {
+  const color = paletteColor(node.type);
+
+  const update = (patch: Partial<ScenarioNode>) =>
     onChange({ ...node, ...patch } as ScenarioNode);
-  };
-  const updateConfig = (patch: Record<string, unknown>) => {
-    onChange({
-      ...node,
-      config: { ...node.config, ...patch },
-    } as ScenarioNode);
-  };
+
+  const updateConfig = (patch: Record<string, unknown>) =>
+    onChange({ ...node, config: { ...node.config, ...patch } } as ScenarioNode);
 
   return (
     <div className="section">
-      <h2>노드 속성 · {node.type}</h2>
+      {/* 노드 타입 헤더 */}
+      <div className="props-node-header">
+        <span style={{ fontSize: 14, color }}>{NODE_ICONS[node.type]}</span>
+        <span className="props-type-badge" style={{ background: color }}>
+          {node.type}
+        </span>
+      </div>
 
       <label>ID</label>
       <input
@@ -69,46 +81,32 @@ export default function PropertyPanel({
         onChange={(e) => update({ description: e.target.value || undefined })}
       />
 
-      <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+      <div className="node-meta-buttons">
         <button
           type="button"
+          className={`node-meta-btn ${isEntry ? "active-entry" : ""}`}
           onClick={onSetEntry}
           disabled={isEntry}
-          style={{
-            flex: 1,
-            padding: "4px 8px",
-            fontSize: 12,
-            borderRadius: 4,
-            border: "1px solid var(--border)",
-            background: isEntry ? "#dcfce7" : "var(--surface)",
-            cursor: isEntry ? "default" : "pointer",
-          }}
         >
-          {isEntry ? "✓ Entry" : "Entry 로 지정"}
+          {isEntry ? "✓ Entry" : "Entry 지정"}
         </button>
         <button
           type="button"
+          className={`node-meta-btn ${isFallback ? "active-fallback" : ""}`}
           onClick={onSetFallback}
-          style={{
-            flex: 1,
-            padding: "4px 8px",
-            fontSize: 12,
-            borderRadius: 4,
-            border: "1px solid var(--border)",
-            background: isFallback ? "#fef3c7" : "var(--surface)",
-            cursor: "pointer",
-          }}
         >
-          {isFallback ? "✓ Fallback" : "Fallback 으로 지정"}
+          {isFallback ? "✓ Fallback" : "Fallback 지정"}
         </button>
       </div>
 
-      <div style={{ height: 12 }} />
+      <div className="config-section-divider" />
       <h2>Config</h2>
       <ConfigEditor node={node} onChange={updateConfig} />
     </div>
   );
 }
+
+// ── Config 편집기 (노드 타입별) ──────────────────────────────────────────────
 
 function ConfigEditor({
   node,
@@ -118,6 +116,33 @@ function ConfigEditor({
   onChange: (patch: Record<string, unknown>) => void;
 }): JSX.Element {
   switch (node.type) {
+    case "start":
+      return (
+        <>
+          <label>trigger_type</label>
+          <select
+            value={node.config.trigger_type}
+            onChange={(e) => onChange({ trigger_type: e.target.value })}
+          >
+            <option value="inbound_call">inbound_call — 수신 전화</option>
+            <option value="outbound_call">outbound_call — 발신 전화</option>
+            <option value="scheduled">scheduled — 예약 발신</option>
+          </select>
+          <label>greeting_message (선택)</label>
+          <textarea
+            placeholder="통화 연결 직후 인사 멘트 (비우면 무음 시작)"
+            value={node.config.greeting_message ?? ""}
+            onChange={(e) =>
+              onChange({ greeting_message: e.target.value || null })
+            }
+          />
+          <div className="start-info-box">
+            ✓ Start 노드는 시나리오에 1개만 허용됩니다.<br />
+            이 노드가 자동으로 Entry 로 지정됩니다.
+          </div>
+        </>
+      );
+
     case "intent":
       return (
         <>
@@ -149,6 +174,7 @@ function ConfigEditor({
           />
         </>
       );
+
     case "llm":
       return (
         <>
@@ -176,7 +202,9 @@ function ConfigEditor({
                 type="number"
                 step="0.1"
                 value={node.config.temperature}
-                onChange={(e) => onChange({ temperature: Number(e.target.value) })}
+                onChange={(e) =>
+                  onChange({ temperature: Number(e.target.value) })
+                }
               />
             </div>
             <div>
@@ -184,7 +212,9 @@ function ConfigEditor({
               <input
                 type="number"
                 value={node.config.max_tokens}
-                onChange={(e) => onChange({ max_tokens: Number(e.target.value) })}
+                onChange={(e) =>
+                  onChange({ max_tokens: Number(e.target.value) })
+                }
               />
             </div>
           </div>
@@ -193,7 +223,7 @@ function ConfigEditor({
               type="checkbox"
               checked={node.config.streaming}
               onChange={(e) => onChange({ streaming: e.target.checked })}
-            />{" "}
+            />
             streaming
           </label>
           <label>
@@ -201,11 +231,12 @@ function ConfigEditor({
               type="checkbox"
               checked={node.config.enable_filler}
               onChange={(e) => onChange({ enable_filler: e.target.checked })}
-            />{" "}
+            />
             enable_filler
           </label>
         </>
       );
+
     case "tool":
       return (
         <>
@@ -239,6 +270,7 @@ function ConfigEditor({
           </select>
         </>
       );
+
     case "branch":
       return (
         <>
@@ -263,6 +295,7 @@ function ConfigEditor({
           ) : null}
         </>
       );
+
     case "transfer":
       return (
         <>
@@ -283,11 +316,12 @@ function ConfigEditor({
               type="checkbox"
               checked={node.config.include_summary}
               onChange={(e) => onChange({ include_summary: e.target.checked })}
-            />{" "}
+            />
             include_summary
           </label>
         </>
       );
+
     case "wait":
       return (
         <>
@@ -307,6 +341,7 @@ function ConfigEditor({
           />
         </>
       );
+
     case "context":
       return (
         <>
@@ -317,7 +352,7 @@ function ConfigEditor({
               try {
                 onChange({ set_slots: JSON.parse(e.target.value) });
               } catch {
-                /* ignore — 사용자가 타이핑 중 */
+                /* 타이핑 중 무시 */
               }
             }}
           />
@@ -336,6 +371,7 @@ function ConfigEditor({
           />
         </>
       );
+
     case "end":
       return (
         <>
@@ -348,6 +384,7 @@ function ConfigEditor({
           />
         </>
       );
+
     default: {
       const _n: never = node;
       return <div>unreachable: {JSON.stringify(_n)}</div>;

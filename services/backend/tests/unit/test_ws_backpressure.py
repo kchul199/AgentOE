@@ -9,16 +9,17 @@
   - send 실패 시 sender._closed = True 전이
   - 메트릭: record_ws_drop / set_ws_queue_depth 호출 여부
 """
+
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from app.core.ws_backpressure import (
-    BoundedWSSender,
     _AUDIO_EVENT_NAMES,
+    BoundedWSSender,
     QueuedEvent,
 )
 

@@ -10,6 +10,7 @@ gRPC server lifecycle — FastAPI lifespan 에 wire.
   - Graceful shutdown: SIGTERM → server.stop(grace) → 진행 중 stream 자연 종료
     대기 (Helm preStop 의 30초 grace 와 정합).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,9 +28,7 @@ from app.repositories.session_repository import SessionRepository
 logger = structlog.get_logger(__name__)
 
 GRPC_PORT: Final[int] = int(getattr(settings, "GRPC_PORT", 50051))
-GRPC_MAX_CONCURRENT_STREAMS: Final[int] = int(
-    getattr(settings, "GRPC_MAX_CONCURRENT_STREAMS", 200)
-)
+GRPC_MAX_CONCURRENT_STREAMS: Final[int] = int(getattr(settings, "GRPC_MAX_CONCURRENT_STREAMS", 200))
 GRPC_GRACEFUL_SHUTDOWN_SEC: Final[float] = float(
     getattr(settings, "GRPC_GRACEFUL_SHUTDOWN_SEC", 25.0)
 )
@@ -55,8 +54,9 @@ def build_server(repo: SessionRepository) -> grpc.aio.Server:
     )
 
     # 1) VoicebotAiService
-    pb_grpc.add_VoicebotAiServiceServicer_to_server(
-        VoicebotAiServicer(repo=repo), server,
+    pb_grpc.add_VoicebotAiServiceServicer_to_server(  # type: ignore[no-untyped-call]
+        VoicebotAiServicer(repo=repo),
+        server,
     )
 
     # 2) Health check (grpc_health_v1)
@@ -72,7 +72,9 @@ def build_server(repo: SessionRepository) -> grpc.aio.Server:
     if getattr(settings, "GRPC_REFLECTION_ENABLED", False):
         try:
             from grpc_reflection.v1alpha import reflection
+
             from app.grpc_stubs.voicebot import voicebot_pb2 as pb
+
             SERVICE_NAMES = (
                 pb.DESCRIPTOR.services_by_name["VoicebotAiService"].full_name,
                 health.SERVICE_NAME,
@@ -109,14 +111,14 @@ class GrpcServerLifecycle:
             return
         self._server = build_server(self._repo)
         await self._server.start()
-        logger.info("gRPC server listening", port=GRPC_PORT,
-                    service="voicebot.ai.VoicebotAiService")
+        logger.info(
+            "gRPC server listening", port=GRPC_PORT, service="voicebot.ai.VoicebotAiService"
+        )
 
     async def stop(self) -> None:
         if self._server is None:
             return
-        logger.info("gRPC server stopping",
-                    grace_sec=GRPC_GRACEFUL_SHUTDOWN_SEC)
+        logger.info("gRPC server stopping", grace_sec=GRPC_GRACEFUL_SHUTDOWN_SEC)
         await self._server.stop(grace=GRPC_GRACEFUL_SHUTDOWN_SEC)
         self._server = None
         logger.info("gRPC server stopped")

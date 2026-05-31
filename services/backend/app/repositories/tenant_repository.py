@@ -1,5 +1,6 @@
 """MongoDB repository for tenants collection."""
-from datetime import datetime, timezone
+
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.database import get_database
@@ -7,15 +8,15 @@ from app.core.exceptions import TenantNotFoundError
 
 
 class TenantRepository:
-    def __init__(self, db=None):
+    def __init__(self, db: Any = None) -> None:
         self._db = db
 
     @property
-    def col(self):
+    def col(self) -> Any:
         return (self._db or get_database())["tenants"]
 
     async def create(self, data: dict[str, Any]) -> dict[str, Any]:
-        data["created_at"] = datetime.now(timezone.utc)
+        data["created_at"] = datetime.now(UTC)
         data.setdefault("enabled", True)
         data.setdefault("plan", "standard")
         data.setdefault("max_sessions", 100)
@@ -35,7 +36,7 @@ class TenantRepository:
         return await cursor.to_list(length=500)
 
     async def update(self, tenant_id: str, update: dict[str, Any]) -> dict[str, Any]:
-        update["updated_at"] = datetime.now(timezone.utc)
+        update["updated_at"] = datetime.now(UTC)
         doc = await self.col.find_one_and_update(
             {"tenant_id": tenant_id},
             {"$set": update},

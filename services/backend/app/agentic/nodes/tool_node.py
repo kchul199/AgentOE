@@ -9,12 +9,14 @@ Tool Node — 외부 도구/커넥터 호출.
     - "raise":    예외 전파 (그래프 종료 → 상담원 전환)
     - "continue": 에러만 기록, 다음 노드 계속
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import structlog
 
@@ -29,12 +31,20 @@ class ToolNotFoundError(Exception):
 
 
 def _bind_args(template: dict[str, str], state: CallbotState) -> dict[str, Any]:
-    """{slot.foo} / {user_input} 형태의 자리표시자를 실제 값으로 치환."""
+    """{slot.foo} / {user_input} 형태의 자리표시자를 실제 값으로 치환.
+
+    {slot.foo} 는 Python format 의 속성 접근 문법을 이용한다.
+    SimpleNamespace 를 사용해 slots 딕셔너리를 객체로 변환하면
+    {slot.foo} → slot_ns.foo 로 정상 치환된다.
+    """
+    from types import SimpleNamespace
+
     bound: dict[str, Any] = {}
+    slot_ns = SimpleNamespace(**dict((state.get("slots", {}) or {}).items()))
     ctx = {
         "user_input": state.get("user_input", ""),
         "intent": (state.get("intent") or {}).get("intent", ""),
-        **{f"slot.{k}": v for k, v in (state.get("slots", {}) or {}).items()},
+        "slot": slot_ns,
     }
     for key, val in template.items():
         if isinstance(val, str):
@@ -78,14 +88,16 @@ def make_tool_node(
                 # 결과는 slots["tool_result"] 에 넣어 이후 LLM/Branch가 참조
                 return {
                     "slots": {**state.get("slots", {}), "tool_result": result},
-                    "tool_calls": [{
-                        "tool": config.tool_name,
-                        "args": args,
-                        "result": _truncate(result),
-                        "latency_ms": elapsed_ms,
-                    }],
+                    "tool_calls": [
+                        {
+                            "tool": config.tool_name,
+                            "args": args,
+                            "result": _truncate(result),
+                            "latency_ms": elapsed_ms,
+                        }
+                    ],
                 }
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if attempt == config.retry:
                     return _handle_error(
                         config, f"Tool '{config.tool_name}' timed out", state, exc=None

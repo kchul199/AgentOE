@@ -21,6 +21,7 @@ dependency_overrides 로 우회해 역할별 동작을 검증한다.
     GET    /api/v1/scenarios/                        — 목록
     Tenant spoof (payload.tenant_id 덮어쓰기) 차단   — 저장된 문서 tenant_id 확인
 """
+
 from __future__ import annotations
 
 import sys
@@ -33,10 +34,15 @@ from fastapi.testclient import TestClient
 
 # 외부 의존성 mock (DB/Redis 없이 실행)
 for _mod in [
-    "motor", "motor.motor_asyncio",
-    "pymongo", "pymongo.errors",
-    "redis", "redis.asyncio",
-    "groq", "google.cloud", "google.cloud.texttospeech",
+    "motor",
+    "motor.motor_asyncio",
+    "pymongo",
+    "pymongo.errors",
+    "redis",
+    "redis.asyncio",
+    "groq",
+    "google.cloud",
+    "google.cloud.texttospeech",
     "google.cloud.texttospeech_v1",
     "grpc",
 ]:
@@ -48,6 +54,7 @@ for _mod in [
 #
 # tests/unit/test_scenario_repository.py 의 _FakeCollection 과 동일한 로직을
 # 라우터 통합 테스트에서도 사용한다 (동일 구현이 두 레벨에서 검증됨).
+
 
 class _FakeCollection:
     def __init__(self) -> None:
@@ -78,7 +85,9 @@ class _FakeCollection:
                 d.update(update["$set"])
 
     async def find_one_and_update(
-        self, q: dict, update: dict,
+        self,
+        q: dict,
+        update: dict,
         return_document: bool = False,
         projection: dict | None = None,
     ) -> dict | None:
@@ -133,6 +142,7 @@ class _FakeCollection:
 
 # ── 픽스처 ─────────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def fake_db():
     return {"scenarios": _FakeCollection()}
@@ -141,37 +151,49 @@ def fake_db():
 @pytest.fixture
 def repo(fake_db):
     from app.repositories.scenario_repository import ScenarioRepository
+
     return ScenarioRepository(db=fake_db)
 
 
 @pytest.fixture
 def admin_tenant():
     from app.core.auth import TenantContext
+
     return TenantContext(
-        tenant_id="t_acme", client_id="c_admin", roles=["admin"],
+        tenant_id="t_acme",
+        client_id="c_admin",
+        roles=["admin"],
     )
 
 
 @pytest.fixture
 def operator_tenant():
     from app.core.auth import TenantContext
+
     return TenantContext(
-        tenant_id="t_acme", client_id="c_op", roles=["operator"],
+        tenant_id="t_acme",
+        client_id="c_op",
+        roles=["operator"],
     )
 
 
 @pytest.fixture
 def client(repo, admin_tenant):
     """admin 권한으로 모든 엔드포인트 접근 가능한 기본 클라이언트."""
-    with patch("app.core.database.init_db", new_callable=AsyncMock), \
-         patch("app.core.database.close_db", new_callable=AsyncMock), \
-         patch("app.core.redis_client.init_redis", new_callable=AsyncMock), \
-         patch("app.core.redis_client.close_redis", new_callable=AsyncMock), \
-         patch("app.core.redis_client.get_redis", return_value=AsyncMock()), \
-         patch("app.domain.kill_switch.KillSwitchService.is_active",
-               new_callable=AsyncMock, return_value=False):
-        from app.main import app
+    with (
+        patch("app.core.database.init_db", new_callable=AsyncMock),
+        patch("app.core.database.close_db", new_callable=AsyncMock),
+        patch("app.core.redis_client.init_redis", new_callable=AsyncMock),
+        patch("app.core.redis_client.close_redis", new_callable=AsyncMock),
+        patch("app.core.redis_client.get_redis", return_value=AsyncMock()),
+        patch(
+            "app.domain.kill_switch.KillSwitchService.is_active",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
         from app.core.auth import get_current_tenant
+        from app.main import app
         from app.repositories.scenario_repository import ScenarioRepository
 
         app.dependency_overrides[get_current_tenant] = lambda: admin_tenant
@@ -184,15 +206,20 @@ def client(repo, admin_tenant):
 @pytest.fixture
 def operator_client(repo, operator_tenant):
     """operator 권한 — publish/delete 차단 확인용."""
-    with patch("app.core.database.init_db", new_callable=AsyncMock), \
-         patch("app.core.database.close_db", new_callable=AsyncMock), \
-         patch("app.core.redis_client.init_redis", new_callable=AsyncMock), \
-         patch("app.core.redis_client.close_redis", new_callable=AsyncMock), \
-         patch("app.core.redis_client.get_redis", return_value=AsyncMock()), \
-         patch("app.domain.kill_switch.KillSwitchService.is_active",
-               new_callable=AsyncMock, return_value=False):
-        from app.main import app
+    with (
+        patch("app.core.database.init_db", new_callable=AsyncMock),
+        patch("app.core.database.close_db", new_callable=AsyncMock),
+        patch("app.core.redis_client.init_redis", new_callable=AsyncMock),
+        patch("app.core.redis_client.close_redis", new_callable=AsyncMock),
+        patch("app.core.redis_client.get_redis", return_value=AsyncMock()),
+        patch(
+            "app.domain.kill_switch.KillSwitchService.is_active",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
         from app.core.auth import get_current_tenant
+        from app.main import app
         from app.repositories.scenario_repository import ScenarioRepository
 
         app.dependency_overrides[get_current_tenant] = lambda: operator_tenant
@@ -203,6 +230,7 @@ def operator_client(repo, operator_tenant):
 
 
 # ── 헬퍼 ───────────────────────────────────────────────────────────────────────
+
 
 def _minimal_scenario(scenario_id: str = "greet", tenant_id: str | None = None) -> dict[str, Any]:
     """통과 가능한 최소 DSL 페이로드 (1개 end 노드)."""
@@ -228,12 +256,13 @@ def _minimal_scenario(scenario_id: str = "greet", tenant_id: str | None = None) 
 
 # ── 저장 ───────────────────────────────────────────────────────────────────────
 
+
 def test_post_scenario_creates_with_server_versioned_and_draft(client):
     resp = client.post("/api/v1/scenarios", json=_minimal_scenario())
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["version"] == 1          # 서버 채번
-    assert body["published"] is False    # 저장은 항상 draft
+    assert body["version"] == 1  # 서버 채번
+    assert body["published"] is False  # 저장은 항상 draft
     assert body["tenant_id"] == "t_acme"
 
 
@@ -271,6 +300,7 @@ def test_post_scenario_invalid_dsl_returns_422(client):
 
 # ── 검증 (저장 없음) ───────────────────────────────────────────────────────────
 
+
 def test_validate_scenario_ok(client):
     resp = client.post("/api/v1/scenarios/validate", json=_minimal_scenario())
     assert resp.status_code == 200
@@ -292,6 +322,7 @@ def test_validate_scenario_not_ok(client):
 
 
 # ── 조회 ───────────────────────────────────────────────────────────────────────
+
 
 def test_get_scenario_latest(client):
     client.post("/api/v1/scenarios", json=_minimal_scenario())  # v1
@@ -329,6 +360,7 @@ def test_get_scenario_missing_version_404(client):
 
 # ── 발행 (admin only) ──────────────────────────────────────────────────────────
 
+
 def test_publish_scenario_admin_ok(client):
     client.post("/api/v1/scenarios", json=_minimal_scenario())
     resp = client.post("/api/v1/scenarios/greet/publish", json={"version": 1})
@@ -352,7 +384,8 @@ def test_publish_previous_demoted(client):
 def test_publish_operator_403(operator_client):
     operator_client.post("/api/v1/scenarios", json=_minimal_scenario())
     resp = operator_client.post(
-        "/api/v1/scenarios/greet/publish", json={"version": 1},
+        "/api/v1/scenarios/greet/publish",
+        json={"version": 1},
     )
     assert resp.status_code == 403
 
@@ -360,7 +393,8 @@ def test_publish_operator_403(operator_client):
 def test_publish_missing_version_404(client):
     client.post("/api/v1/scenarios", json=_minimal_scenario())
     resp = client.post(
-        "/api/v1/scenarios/greet/publish", json={"version": 42},
+        "/api/v1/scenarios/greet/publish",
+        json={"version": 42},
     )
     assert resp.status_code == 404
 
@@ -372,12 +406,14 @@ def test_publish_bad_payload_400(client):
     assert resp.status_code == 400
     # version 음수
     resp = client.post(
-        "/api/v1/scenarios/greet/publish", json={"version": -1},
+        "/api/v1/scenarios/greet/publish",
+        json={"version": -1},
     )
     assert resp.status_code == 400
 
 
 # ── 삭제 (admin only) ──────────────────────────────────────────────────────────
+
 
 def test_delete_draft_version_204(client):
     client.post("/api/v1/scenarios", json=_minimal_scenario())
@@ -408,6 +444,7 @@ def test_delete_missing_version_404(client):
 
 
 # ── 목록 ───────────────────────────────────────────────────────────────────────
+
 
 def test_list_scenarios_latest_per_id(client):
     client.post("/api/v1/scenarios", json=_minimal_scenario("s1"))

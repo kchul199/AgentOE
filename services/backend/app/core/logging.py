@@ -22,14 +22,16 @@
     from app.core.logging import bind_session_context
     bind_session_context(session_id="...", tenant_id="...")
 """
+
 from __future__ import annotations
 
 import logging
 import re
 import sys
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 import structlog
 from structlog.contextvars import (
@@ -39,7 +41,6 @@ from structlog.contextvars import (
 )
 
 from app.core.config import settings
-
 
 # ── PII 마스킹 ────────────────────────────────────────────────────────────────
 #
@@ -70,12 +71,30 @@ _PII_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
 )
 
 # 마스킹 제외 키 (구조화 로그에서 건드리면 안 되는 메타 키)
-_PII_SAFE_KEYS: frozenset[str] = frozenset({
-    "session_id", "tenant_id", "request_id", "client_id", "trace_id", "span_id",
-    "event", "level", "timestamp", "logger", "stage", "pipeline_stage",
-    "policy_level", "latency_ms", "status_code", "path", "method",
-    "model", "circuit_state", "severity",
-})
+_PII_SAFE_KEYS: frozenset[str] = frozenset(
+    {
+        "session_id",
+        "tenant_id",
+        "request_id",
+        "client_id",
+        "trace_id",
+        "span_id",
+        "event",
+        "level",
+        "timestamp",
+        "logger",
+        "stage",
+        "pipeline_stage",
+        "policy_level",
+        "latency_ms",
+        "status_code",
+        "path",
+        "method",
+        "model",
+        "circuit_state",
+        "severity",
+    }
+)
 
 
 def mask_pii(text: str) -> str:
@@ -112,7 +131,9 @@ def mask_pii_dict(d: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _structlog_pii_processor(_logger: Any, _method: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+def _structlog_pii_processor(
+    _logger: Any, _method: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
     """structlog processor: 로그 이벤트의 모든 문자열 필드에 마스킹 적용."""
     if not settings.PII_MASKING_ENABLED:
         return event_dict
@@ -120,6 +141,7 @@ def _structlog_pii_processor(_logger: Any, _method: str, event_dict: dict[str, A
 
 
 # ── 로깅 설정 ──────────────────────────────────────────────────────────────────
+
 
 def setup_logging() -> None:
     """애플리케이션 시작 시 1회 호출. structlog 전역 설정."""
@@ -133,6 +155,7 @@ def setup_logging() -> None:
     )
 
     # 운영/개발 환경별 렌더러 선택
+    renderer: Any
     if settings.ENVIRONMENT == "production":
         renderer = structlog.processors.JSONRenderer()
     else:
@@ -150,7 +173,7 @@ def setup_logging() -> None:
             # 4. ISO 8601 타임스탬프
             structlog.processors.TimeStamper(fmt="iso", utc=True),
             # 5. PII 마스킹 — 렌더링 직전에 적용 (핫패스, settings flag로 제어)
-            _structlog_pii_processor,
+            _structlog_pii_processor,  # type: ignore[list-item]
             # 6. 최종 렌더링
             renderer,
         ],
@@ -162,6 +185,7 @@ def setup_logging() -> None:
 
 
 # ── Context var 헬퍼 ──────────────────────────────────────────────────────────
+
 
 def bind_request_context(
     request_id: str | None = None,

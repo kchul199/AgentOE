@@ -23,16 +23,17 @@ Transfer Service — AI 상담사 → 인간 상담사 이관 오케스트레이
   - TOOL_TIMEOUT: Tool 타임아웃 임계치 초과
   - MANUAL: 운영자 수동 이관
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
-from app.domain.session_fsm import SessionFSM, SessionEventType, SessionState
+from app.domain.session_fsm import SessionEventType, SessionFSM, SessionState
 from app.repositories.session_repository import SessionRepository
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ TRANSFER_TIMEOUT_SECONDS = 30
 MAX_TRANSFER_RETRIES = 3
 
 
-class TransferReason(str, Enum):
+class TransferReason(StrEnum):
     G4_POLICY = "G4_POLICY"
     G5_POLICY = "G5_POLICY"
     CUSTOMER_REQUEST = "CUSTOMER_REQUEST"
@@ -53,13 +54,13 @@ class TransferReason(str, Enum):
     MANUAL = "MANUAL"
 
 
-class TransferFallback(str, Enum):
-    RETRY = "RETRY"         # 큐 재시도
-    CALLBACK = "CALLBACK"   # 콜백 예약 후 종료
-    AI_RESUME = "AI_RESUME" # AI 계속 응대
+class TransferFallback(StrEnum):
+    RETRY = "RETRY"  # 큐 재시도
+    CALLBACK = "CALLBACK"  # 콜백 예약 후 종료
+    AI_RESUME = "AI_RESUME"  # AI 계속 응대
 
 
-class TransferStatus(str, Enum):
+class TransferStatus(StrEnum):
     PENDING = "PENDING"
     ACCEPTED = "ACCEPTED"
     FAILED = "FAILED"
@@ -73,22 +74,22 @@ class TransferRequest:
     session_id: str
     tenant_id: str
     reason: TransferReason
-    context_summary: str        # LLM이 생성한 상담 요약 (상담사에게 전달)
+    context_summary: str  # LLM이 생성한 상담 요약 (상담사에게 전달)
     policy_level: str = "G1"
-    priority: int = 5           # 1(긴급) ~ 10(일반)
+    priority: int = 5  # 1(긴급) ~ 10(일반)
     metadata: dict = field(default_factory=dict)
-    requested_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    requested_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
 class TransferResult:
     status: TransferStatus
-    agent_id: str | None = None       # 수락한 상담사 ID
+    agent_id: str | None = None  # 수락한 상담사 ID
     agent_name: str | None = None
     queue_position: int | None = None  # 대기 큐 위치 (FAILED 시)
     fallback_action: TransferFallback | None = None
-    message: str = ""                  # 고객 안내 메시지
-    completed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    message: str = ""  # 고객 안내 메시지
+    completed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class TransferService:
@@ -216,7 +217,7 @@ class TransferService:
             )
             return self._parse_cti_response(cti_response)
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 "CTI transfer timed out",
                 extra={"session_id": req.session_id},
@@ -225,7 +226,7 @@ class TransferService:
                 status=TransferStatus.TIMED_OUT,
                 message="상담사 연결 시간이 초과되었습니다.",
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "CTI dispatch error: %s",
                 exc,
@@ -296,8 +297,7 @@ class TransferService:
             },
         )
         result.message = (
-            f"상담사 {result.agent_name or result.agent_id}님께 연결됩니다. "
-            "잠시만 기다려 주세요."
+            f"상담사 {result.agent_name or result.agent_id}님께 연결됩니다. 잠시만 기다려 주세요."
         )
         return result
 
@@ -336,15 +336,18 @@ class TransferService:
             metadata={"fallback": fallback.value, "reason": result.status.value},
         )
 
-        if fallback == TransferFallback.CALLBACK:
-            result = await self._handle_callback_fallback(fsm, session_id, result)
-        elif fallback == TransferFallback.AI_RESUME:
+        if fallback == TransferFallback.AI_RESUME:
             result = await self._handle_ai_resume_fallback(fsm, session_id, result)
+        elif fallback == TransferFallback.CALLBACK or fallback == TransferFallback.RETRY:
+            # RETRY 소진 후 도달한 경우도 CALLBACK fallback으로 처리
+            result = await self._handle_callback_fallback(fsm, session_id, result)
         else:
             # 기본: ENDED
             fsm.transition(SessionState.ENDED)
             await self._repo.end_session(session_id, reason="transfer_failed_no_fallback", fsm=fsm)
-            result.message = "죄송합니다. 현재 상담사 연결이 어렵습니다. 나중에 다시 연락 주시기 바랍니다."
+            result.message = (
+                "죄송합니다. 현재 상담사 연결이 어렵습니다. 나중에 다시 연락 주시기 바랍니다."
+            )
 
         return result
 
@@ -394,8 +397,7 @@ class TransferService:
         result.status = TransferStatus.FALLBACK_AI_RESUME
         result.fallback_action = TransferFallback.AI_RESUME
         result.message = (
-            "현재 상담사 연결이 어렵습니다. "
-            "제가 계속 도와드리겠습니다. 어떤 도움이 필요하신가요?"
+            "현재 상담사 연결이 어렵습니다. 제가 계속 도와드리겠습니다. 어떤 도움이 필요하신가요?"
         )
         logger.info("Transfer fallback: AI_RESUME", extra={"session_id": session_id})
         return result
@@ -409,9 +411,21 @@ class TransferService:
         간단한 키워드 기반 (추후 NLU 모델로 교체 가능).
         """
         TRANSFER_KEYWORDS = [
-            "상담사", "담당자", "사람", "직원", "연결", "바꿔",
-            "agent", "human", "operator", "representative",
-            "사람이랑", "사람과", "직접", "전화", "통화",
+            "상담사",
+            "담당자",
+            "사람",
+            "직원",
+            "연결",
+            "바꿔",
+            "agent",
+            "human",
+            "operator",
+            "representative",
+            "사람이랑",
+            "사람과",
+            "직접",
+            "전화",
+            "통화",
         ]
         text_lower = text.lower()
         return any(kw in text_lower for kw in TRANSFER_KEYWORDS)
@@ -426,7 +440,7 @@ class TransferService:
             return current_issue or "고객 문의 내용 없음"
 
         turns = []
-        for i, msg in enumerate(history[-10:]):  # 최근 5턴
+        for _i, msg in enumerate(history[-10:]):  # 최근 5턴
             role = "고객" if msg["role"] == "user" else "AI"
             turns.append(f"{role}: {msg['content'][:100]}")
 

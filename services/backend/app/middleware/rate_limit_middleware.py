@@ -10,13 +10,14 @@ Key 스킴:
   agentoe:rl:ip:{ip}         분당 per-IP
   agentoe:rl:t:{tenant_id}   분당 per-tenant (JWT에서 추출)
 """
+
 from __future__ import annotations
 
 import base64
 import json
 
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
@@ -41,10 +42,7 @@ def _extract_tenant_id(request: Request) -> str | None:
     """JWT Authorization 헤더 또는 WS query-param 'token' 에서 tenant_id 추출 (무검증)."""
     token: str | None = None
     auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        token = auth[7:]
-    else:
-        token = request.query_params.get("token")
+    token = auth[7:] if auth.startswith("Bearer ") else request.query_params.get("token")
     if not token:
         return None
     parts = token.split(".")
@@ -57,7 +55,7 @@ def _extract_tenant_id(request: Request) -> str | None:
             payload_b64 += "=" * padding
         payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode())
         return payload.get("tenant_id")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -75,7 +73,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
-    async def dispatch(self, request: Request, call_next) -> Response:  # type: ignore[override]
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if not settings.RATE_LIMIT_ENABLED:
             return await call_next(request)
 
@@ -102,9 +100,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         tenant_id = _extract_tenant_id(request)
         if tenant_id:
             tenant_bucket = f"tenant:{tenant_id}"
-            t_ok = await rate_limit_check(
-                tenant_bucket, settings.RATE_LIMIT_PER_TENANT_PER_MIN, 60
-            )
+            t_ok = await rate_limit_check(tenant_bucket, settings.RATE_LIMIT_PER_TENANT_PER_MIN, 60)
             if not t_ok:
                 logger.warning(
                     "rate_limit_exceeded",

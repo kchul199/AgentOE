@@ -2,6 +2,7 @@
 ConnectorRegistry — 테넌트별 커넥터 인스턴스 관리
 세션 스코프 자격증명, whitelist 거버넌스
 """
+
 import logging
 from typing import Any
 
@@ -40,8 +41,9 @@ class ConnectorRegistry:
             raise ValueError(f"Unknown connector type: '{connector_type}'")
         instance = cls(connector_id=connector_id, tenant_id=tenant_id, config=config)
         self._cache[self._make_key(tenant_id, connector_id)] = instance
-        logger.info("Connector registered: id=%s type=%s tenant=%s",
-                    connector_id, connector_type, tenant_id)
+        logger.info(
+            "Connector registered: id=%s type=%s tenant=%s", connector_id, connector_type, tenant_id
+        )
         return instance
 
     def get(self, tenant_id: str, connector_id: str) -> BaseConnector | None:
@@ -54,6 +56,7 @@ class ConnectorRegistry:
         connector = self.get(tenant_id, connector_id)
         if connector is None:
             from app.connectors.base_connector import ConnectorStatus
+
             return ConnectorResponse(
                 status=ConnectorStatus.ERROR,
                 data={},
@@ -65,7 +68,7 @@ class ConnectorRegistry:
 
     def list_connectors(self, tenant_id: str) -> list[str]:
         prefix = f"{tenant_id}:"
-        return [k[len(prefix):] for k in self._cache if k.startswith(prefix)]
+        return [k[len(prefix) :] for k in self._cache if k.startswith(prefix)]
 
 
 # 전역 레지스트리 싱글턴

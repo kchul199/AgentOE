@@ -1,0 +1,35 @@
+# ── ops-portal staging values (Phase N — N2.6) ────────────────────────────
+image:
+  repository: REPLACE_ECR/agentoe-staging/ops-portal
+  tag: ""          # CI 가 IMAGE_TAG 로 override
+
+replicaCount: 2
+
+backendUpstream: "http://agentoe-backend.default.svc.cluster.local"
+
+ingress:
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/group.name: agentoe-internal-staging
+    alb.ingress.kubernetes.io/certificate-arn: "REPLACE_ACM_CERT_ARN_STAGING"
+    alb.ingress.kubernetes.io/load-balancer-attributes: >-
+      idle_timeout.timeout_seconds=3600
+  hosts:
+    - host: portal-staging.agentoe.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 4
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+environment: "staging"

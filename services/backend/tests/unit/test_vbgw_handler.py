@@ -1,16 +1,20 @@
 """
-Unit tests for VBGW WebSocket Handler (vbgw.py)
+Unit tests for VBGW WebSocket Handler / CallSessionOrchestrator
 
 테스트 범위:
 - JWT 검증 (_decode_token)
-- VBGWSession 상태 전이 및 제어 메시지 처리
+- CallSessionOrchestrator 상태 전이 및 제어 메시지 처리
 - 오디오 버퍼 누적 로직
 - 파이프라인 실행 (mock)
 - 파이프라인 오류 처리 (CircuitBreakerOpenError, generic)
 - 세션 종료 처리
 - Idle timeout 감지
+
+리팩토링 이력:
+  VBGWSession(ws=...) 패턴 → CallSessionOrchestrator(repo=...) 패턴으로 전환.
+  WS 직접 전송 검증 → 반환된 OutboundEvent 리스트 검증으로 전환.
 """
-import asyncio
+
 import base64
 import json
 import time
@@ -18,37 +22,58 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.api.v1.routers.vbgw import (
-    MIN_AUDIO_BYTES,
-    VBGWSession,
-    _decode_token,
-    _evt,
-)
+from app.api.v1.routers.vbgw import _decode_token
 from app.domain.circuit_breaker import CircuitBreakerOpenError
 from app.domain.session_fsm import SessionState
 from app.services.ai_pipeline import PipelineResult
-
+from app.services.call_session_orchestrator import (
+    MIN_AUDIO_BYTES,
+    CallSessionOrchestrator,
+    OutboundEvent,
+)
 
 # ── 픽스처 ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def mock_ws():
-    ws = AsyncMock()
-    ws.send_text = AsyncMock()
-    ws.close = AsyncMock()
-    return ws
+def mock_repo():
+    repo = AsyncMock()
+    repo.end_session = AsyncMock()
+    repo.save_turn = AsyncMock()
+    return repo
 
 
 @pytest.fixture
-def session(mock_ws):
-    """테스트용 VBGWSession (AIPipeline은 mock 처리)."""
-    s = VBGWSession(
-        ws=mock_ws,
-        session_id="test-session-001",
-        tenant_id="tenant-abc",
-        client_id="client-xyz",
-    )
+def session(mock_repo):
+    """테스트용 CallSessionOrchestrator (AIPipeline + TransferService mock 처리).
+
+    TransferService → SessionRepository → get_database 체인이 DB를 필요로 하므로
+    단위 테스트 경계에서 TransferService 생성을 mock으로 차단.
+    TransferService의 classmethods(detect_transfer_intent, build_context_summary)는
+    원본을 사용하도록 MagicMock spec으로 설정하지 않음.
+    """
+    mock_transfer_svc = AsyncMock()
+    mock_transfer_svc.request = AsyncMock(return_value=MagicMock(status="WAITING"))
+
+    with patch(
+        "app.services.call_session_orchestrator.TransferService",
+        return_value=mock_transfer_svc,
+    ):
+        # class method들은 원본 유지를 위해 별도 patch
+        with patch(
+            "app.services.call_session_orchestrator.TransferService.detect_transfer_intent",
+            return_value=False,
+        ):
+            with patch(
+                "app.services.call_session_orchestrator.TransferService.build_context_summary",
+                return_value="",
+            ):
+                s = CallSessionOrchestrator(
+                    session_id="test-session-001",
+                    tenant_id="tenant-abc",
+                    client_id="client-xyz",
+                    repo=mock_repo,
+                )
     return s
 
 
@@ -63,6 +88,14 @@ def sample_pipeline_result():
         latency={"stt_ms": 200.0, "llm_ms": 300.0, "tts_ms": 150.0, "total_ms": 650.0},
         filler_triggered=False,
     )
+
+
+# ── 이벤트 파싱 헬퍼 ────────────────────────────────────────────────────────────
+
+
+def _parse(events: list[OutboundEvent]) -> list[dict]:
+    """OutboundEvent 리스트 → dict 리스트 (검증용)."""
+    return [json.loads(e.to_json()) for e in events]
 
 
 # ── JWT 검증 테스트 ────────────────────────────────────────────────────────────
@@ -81,6 +114,7 @@ def test_decode_token_empty_returns_none():
 def test_decode_valid_token():
     """유효한 JWT 토큰 검증."""
     from app.core.auth import create_access_token
+
     token = create_access_token(
         tenant_id="tenant-001",
         client_id="client-001",
@@ -92,18 +126,19 @@ def test_decode_valid_token():
     assert payload["sub"] == "client-001"
 
 
-# ── 이벤트 헬퍼 테스트 ──────────────────────────────────────────────────────────
+# ── OutboundEvent 직렬화 테스트 ────────────────────────────────────────────────
 
 
-def test_evt_creates_valid_json():
-    result = _evt("test_event", key="value", num=42)
+def test_outbound_event_creates_valid_json():
+    evt = OutboundEvent(name="test_event", payload={"key": "value", "num": 42})
+    result = evt.to_json()
     parsed = json.loads(result)
     assert parsed["event"] == "test_event"
     assert parsed["key"] == "value"
     assert parsed["num"] == 42
 
 
-# ── VBGWSession 상태 전이 테스트 ───────────────────────────────────────────────
+# ── CallSessionOrchestrator 상태 전이 테스트 ──────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -113,12 +148,10 @@ async def test_initial_state_is_idle(session):
 
 @pytest.mark.asyncio
 async def test_start_listening_transitions_to_listening(session):
-    await session.handle_control({"action": "start_listening"})
+    events = await session.handle_control({"action": "start_listening"})
     assert session.fsm.state == SessionState.LISTENING
-    # state_change 이벤트가 전송됐는지 확인
-    call_args = session.ws.send_text.call_args_list
-    events = [json.loads(c[0][0]) for c in call_args]
-    state_events = [e for e in events if e.get("event") == "state_change"]
+    # state_change 이벤트가 반환됐는지 확인
+    state_events = [e for e in _parse(events) if e.get("event") == "state_change"]
     assert any(e["state"] == "LISTENING" for e in state_events)
 
 
@@ -130,16 +163,15 @@ async def test_hangup_transitions_to_ended(session):
 
 @pytest.mark.asyncio
 async def test_ping_sends_pong(session):
-    await session.handle_control({"action": "ping"})
-    sent = [json.loads(c[0][0]) for c in session.ws.send_text.call_args_list]
-    assert any(e["event"] == "pong" for e in sent)
+    events = await session.handle_control({"action": "ping"})
+    assert any(e["event"] == "pong" for e in _parse(events))
 
 
 @pytest.mark.asyncio
 async def test_unknown_action_sends_error(session):
-    await session.handle_control({"action": "unknown_action_xyz"})
-    sent = [json.loads(c[0][0]) for c in session.ws.send_text.call_args_list]
-    assert any(e["event"] == "error" and e["code"] == "UNKNOWN_ACTION" for e in sent)
+    events = await session.handle_control({"action": "unknown_action_xyz"})
+    parsed = _parse(events)
+    assert any(e["event"] == "error" and e.get("code") == "UNKNOWN_ACTION" for e in parsed)
 
 
 # ── 오디오 버퍼 테스트 ─────────────────────────────────────────────────────────
@@ -147,7 +179,7 @@ async def test_unknown_action_sends_error(session):
 
 @pytest.mark.asyncio
 async def test_audio_ignored_before_start_listening(session):
-    """start_listening 이전에 오디오 수신 시 버퍼에 쌓이지 않아야 함."""
+    """start_listening 이전에 오디오 수신 시 파이프라인 미실행."""
     audio = b"\x00" * MIN_AUDIO_BYTES
     with patch.object(session, "_run_pipeline", new_callable=AsyncMock) as mock_run:
         await session.handle_audio(audio)
@@ -172,6 +204,7 @@ async def test_audio_triggers_pipeline_at_threshold(session):
 
     large_chunk = b"\x00" * MIN_AUDIO_BYTES
     with patch.object(session, "_run_pipeline", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = []
         await session.handle_audio(large_chunk)
         mock_run.assert_called_once()
 
@@ -181,13 +214,16 @@ async def test_audio_triggers_pipeline_at_threshold(session):
 
 @pytest.mark.asyncio
 async def test_run_pipeline_sends_all_events(session, sample_pipeline_result):
-    """파이프라인 성공 시 stt_result, llm_chunk, tts_ready, pipeline_done 이벤트 전송."""
-    with patch.object(session.pipeline, "process", new=AsyncMock(return_value=sample_pipeline_result)):
-        await session._run_pipeline(b"\x00" * 100)
+    """파이프라인 성공 시 stt_result, llm_chunk, tts_ready, pipeline_done 이벤트 반환."""
+    with (
+        patch.object(
+            session._pipeline, "process", new=AsyncMock(return_value=sample_pipeline_result)
+        ),
+        patch.object(session, "_persist_turn", new=AsyncMock()),
+    ):
+        events = await session._run_pipeline(b"\x00" * 100)
 
-    sent = [json.loads(c[0][0]) for c in session.ws.send_text.call_args_list]
-    event_names = [e["event"] for e in sent]
-
+    event_names = [json.loads(e.to_json())["event"] for e in events]
     assert "stt_result" in event_names
     assert "llm_chunk" in event_names
     assert "tts_ready" in event_names
@@ -196,12 +232,17 @@ async def test_run_pipeline_sends_all_events(session, sample_pipeline_result):
 
 @pytest.mark.asyncio
 async def test_run_pipeline_sends_audio_base64(session, sample_pipeline_result):
-    """TTS 오디오가 base64 인코딩되어 전송돼야 함."""
-    with patch.object(session.pipeline, "process", new=AsyncMock(return_value=sample_pipeline_result)):
-        await session._run_pipeline(b"\x00" * 100)
+    """TTS 오디오가 base64 인코딩되어 반환돼야 함."""
+    with (
+        patch.object(
+            session._pipeline, "process", new=AsyncMock(return_value=sample_pipeline_result)
+        ),
+        patch.object(session, "_persist_turn", new=AsyncMock()),
+    ):
+        events = await session._run_pipeline(b"\x00" * 100)
 
-    sent = [json.loads(c[0][0]) for c in session.ws.send_text.call_args_list]
-    tts_evt = next(e for e in sent if e["event"] == "tts_ready")
+    event_dicts = _parse(events)
+    tts_evt = next(e for e in event_dicts if e["event"] == "tts_ready")
     decoded = base64.b64decode(tts_evt["audio_b64"])
     assert decoded == sample_pipeline_result.tts_audio
 
@@ -209,7 +250,12 @@ async def test_run_pipeline_sends_audio_base64(session, sample_pipeline_result):
 @pytest.mark.asyncio
 async def test_run_pipeline_updates_history(session, sample_pipeline_result):
     """파이프라인 완료 후 대화 히스토리가 업데이트돼야 함."""
-    with patch.object(session.pipeline, "process", new=AsyncMock(return_value=sample_pipeline_result)):
+    with (
+        patch.object(
+            session._pipeline, "process", new=AsyncMock(return_value=sample_pipeline_result)
+        ),
+        patch.object(session, "_persist_turn", new=AsyncMock()),
+    ):
         await session._run_pipeline(b"\x00" * 100)
 
     assert len(session.history) == 2
@@ -221,7 +267,7 @@ async def test_run_pipeline_updates_history(session, sample_pipeline_result):
 
 @pytest.mark.asyncio
 async def test_run_pipeline_policy_blocked(session):
-    """PolicyGate 차단 시 error 이벤트 전송 후 LISTENING으로 복귀."""
+    """PolicyGate 차단(G3) 시 POLICY_BLOCKED error 이벤트 반환."""
     blocked_result = PipelineResult(
         stt_text="나쁜 말",
         llm_text="[POLICY_BLOCKED:G3]",
@@ -230,39 +276,41 @@ async def test_run_pipeline_policy_blocked(session):
         policy_allowed=False,
         latency={},
     )
-    with patch.object(session.pipeline, "process", new=AsyncMock(return_value=blocked_result)):
-        await session._run_pipeline(b"\x00" * 100)
+    with patch.object(session._pipeline, "process", new=AsyncMock(return_value=blocked_result)):
+        events = await session._run_pipeline(b"\x00" * 100)
 
-    sent = [json.loads(c[0][0]) for c in session.ws.send_text.call_args_list]
-    errors = [e for e in sent if e["event"] == "error" and e["code"] == "POLICY_BLOCKED"]
+    parsed = _parse(events)
+    errors = [e for e in parsed if e["event"] == "error" and e.get("code") == "POLICY_BLOCKED"]
     assert len(errors) == 1
 
 
 @pytest.mark.asyncio
 async def test_run_pipeline_circuit_breaker_open(session):
-    """CircuitBreakerOpenError 발생 시 SERVICE_UNAVAILABLE 에러 이벤트 전송."""
+    """CircuitBreakerOpenError 발생 시 SERVICE_UNAVAILABLE 에러 이벤트 반환."""
     with patch.object(
-        session.pipeline, "process",
+        session._pipeline,
+        "process",
         side_effect=CircuitBreakerOpenError("groq-stt"),
     ):
-        await session._run_pipeline(b"\x00" * 100)
+        events = await session._run_pipeline(b"\x00" * 100)
 
-    sent = [json.loads(c[0][0]) for c in session.ws.send_text.call_args_list]
-    errors = [e for e in sent if e["event"] == "error" and e["code"] == "SERVICE_UNAVAILABLE"]
+    parsed = _parse(events)
+    errors = [e for e in parsed if e["event"] == "error" and e.get("code") == "SERVICE_UNAVAILABLE"]
     assert len(errors) == 1
 
 
 @pytest.mark.asyncio
 async def test_run_pipeline_generic_error(session):
-    """일반 예외 발생 시 PIPELINE_ERROR 이벤트 전송."""
+    """일반 예외 발생 시 PIPELINE_ERROR 이벤트 반환."""
     with patch.object(
-        session.pipeline, "process",
+        session._pipeline,
+        "process",
         side_effect=RuntimeError("unexpected error"),
     ):
-        await session._run_pipeline(b"\x00" * 100)
+        events = await session._run_pipeline(b"\x00" * 100)
 
-    sent = [json.loads(c[0][0]) for c in session.ws.send_text.call_args_list]
-    errors = [e for e in sent if e["event"] == "error" and e["code"] == "PIPELINE_ERROR"]
+    parsed = _parse(events)
+    errors = [e for e in parsed if e["event"] == "error" and e.get("code") == "PIPELINE_ERROR"]
     assert len(errors) == 1
 
 
@@ -272,10 +320,14 @@ async def test_run_pipeline_generic_error(session):
 @pytest.mark.asyncio
 async def test_history_capped_at_20_entries(session, sample_pipeline_result):
     """대화 히스토리가 20개를 초과하지 않아야 함."""
-    with patch.object(session.pipeline, "process", new=AsyncMock(return_value=sample_pipeline_result)):
-        with patch.object(session, "_persist_state", new=AsyncMock()):
-            for _ in range(15):
-                await session._run_pipeline(b"\x00" * 100)
+    with (
+        patch.object(
+            session._pipeline, "process", new=AsyncMock(return_value=sample_pipeline_result)
+        ),
+        patch.object(session, "_persist_turn", new=AsyncMock()),
+    ):
+        for _ in range(15):
+            await session._run_pipeline(b"\x00" * 100)
 
     assert len(session.history) <= 20
 
@@ -285,15 +337,15 @@ async def test_history_capped_at_20_entries(session, sample_pipeline_result):
 
 @pytest.mark.asyncio
 async def test_end_session_transitions_to_ended(session):
-    await session._end_session(reason="test")
+    await session.end_session(reason="test")
     assert session.fsm.state == SessionState.ENDED
 
 
 @pytest.mark.asyncio
 async def test_end_session_idempotent(session):
     """중복 종료 호출이 예외를 발생시키지 않아야 함."""
-    await session._end_session()
-    await session._end_session()  # 두 번 호출해도 안전
+    await session.end_session()
+    await session.end_session()  # 두 번 호출해도 안전
     assert session.fsm.state == SessionState.ENDED
 
 
@@ -321,5 +373,6 @@ async def test_stop_listening_flushes_buffer(session):
     session._audio_buffer.extend(small)
 
     with patch.object(session, "_run_pipeline", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = []
         await session.handle_control({"action": "stop_listening"})
         mock_run.assert_called_once_with(small)

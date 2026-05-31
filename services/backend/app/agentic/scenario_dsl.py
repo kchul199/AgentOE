@@ -26,14 +26,15 @@ DSL 구조:
     * GUI Scenario Builder가 이 스키마에 맞춰 JSON 생성
     * scenario_compiler가 이 DSL을 LangGraph StateGraph로 변환
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
-
 # ── 노드 타입 — Tagged Union ─────────────────────────────────────────────────
+
 
 class _NodeBase(BaseModel):
     id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
@@ -43,8 +44,9 @@ class _NodeBase(BaseModel):
 
 class IntentNodeConfig(BaseModel):
     """인텐트 분류 — 소형 LLM 또는 정규식/키워드 기반"""
+
     labels: list[str] = Field(..., min_length=2)
-    model: str = "groq-llama-3.3-70b"          # 분류 전용 소형 모델 교체 가능
+    model: str = "groq-llama-3.3-70b"  # 분류 전용 소형 모델 교체 가능
     prompt_template: str | None = None
     threshold: float = 0.5
 
@@ -56,6 +58,7 @@ class IntentNode(_NodeBase):
 
 class LLMNodeConfig(BaseModel):
     """LLM 응답 생성 — 스트리밍 + Filler 전략"""
+
     model: str = "groq-llama-4-scout"
     fallback_model: str = "groq-llama-3.3-70b"
     system_prompt: str
@@ -73,6 +76,7 @@ class LLMNode(_NodeBase):
 
 class ToolNodeConfig(BaseModel):
     """외부 도구/커넥터 호출 (MCP, HTTP, DB 등)"""
+
     tool_name: str = Field(..., description="registered in app.connectors.registry")
     args_template: dict[str, str] = Field(default_factory=dict)
     timeout_s: float = 5.0
@@ -87,6 +91,7 @@ class ToolNode(_NodeBase):
 
 class BranchNodeConfig(BaseModel):
     """조건 분기 — 엣지의 when 절로 다음 노드를 선택"""
+
     # 조건 평가 방식: 'expr' = 간단한 파이썬식, 'intent' = 현재 intent 매칭
     mode: Literal["expr", "intent", "slot"] = "intent"
     # slot 모드일 때 어느 슬롯을 검사할지
@@ -100,6 +105,7 @@ class BranchNode(_NodeBase):
 
 class TransferNodeConfig(BaseModel):
     """상담원 전환 (VBGW에 SIP REFER 송출)"""
+
     queue: str = "default"
     reason: str = "user_request"
     include_summary: bool = True
@@ -112,6 +118,7 @@ class TransferNode(_NodeBase):
 
 class WaitNodeConfig(BaseModel):
     """사용자 입력 대기 (다음 STT 결과가 올 때까지 그래프 일시 정지)"""
+
     timeout_s: float = 15.0
     prompt_on_timeout: str | None = "죄송합니다, 말씀 못 들었습니다. 다시 말씀해 주세요."
 
@@ -123,6 +130,7 @@ class WaitNode(_NodeBase):
 
 class ContextUpdateNodeConfig(BaseModel):
     """슬롯/메모리 업데이트 (LLM 호출 없이 상태만 변경)"""
+
     set_slots: dict[str, Any] = Field(default_factory=dict)
     clear_slots: list[str] = Field(default_factory=list)
 
@@ -141,14 +149,41 @@ class EndNode(_NodeBase):
     config: EndNodeConfig = EndNodeConfig()
 
 
+class StartNodeConfig(BaseModel):
+    """시나리오 진입점 — 통화 인입 방식을 기술하는 메타 노드.
+
+    start 노드는 시나리오에 정확히 1개 존재해야 하며, Scenario.entry 는 자동으로
+    이 노드의 id 를 가리키도록 컴파일러가 설정합니다.
+    """
+
+    trigger_type: Literal["inbound_call", "outbound_call", "scheduled"] = "inbound_call"
+    greeting_message: str | None = Field(
+        default=None,
+        description="통화 연결 직후 재생할 간단한 인사 멘트 (TTS). null 이면 무음 시작.",
+    )
+
+
+class StartNode(_NodeBase):
+    type: Literal["start"] = "start"
+    config: StartNodeConfig = StartNodeConfig()
+
+
 # Union type for discriminated parsing
-Node = Union[
-    IntentNode, LLMNode, ToolNode, BranchNode,
-    TransferNode, WaitNode, ContextUpdateNode, EndNode,
+Node = Union[  # noqa: UP007
+    StartNode,
+    IntentNode,
+    LLMNode,
+    ToolNode,
+    BranchNode,
+    TransferNode,
+    WaitNode,
+    ContextUpdateNode,
+    EndNode,
 ]
 
 
 # ── 엣지 ─────────────────────────────────────────────────────────────────────
+
 
 class Edge(BaseModel):
     from_: str = Field(..., alias="from", min_length=1)
@@ -162,6 +197,7 @@ class Edge(BaseModel):
 
 
 # ── 시나리오 ─────────────────────────────────────────────────────────────────
+
 
 class ScenarioLimits(BaseModel):
     max_turns: int = Field(default=30, ge=1, le=200)
@@ -190,16 +226,32 @@ class Scenario(BaseModel):
     # 메타데이터
     tags: list[str] = Field(default_factory=list)
     created_by: str | None = None
-    created_at: str | None = None   # ISO 8601
-    published: bool = False          # False면 draft
+    created_at: str | None = None  # ISO 8601
+    published: bool = False  # False면 draft
 
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
-    def _validate_graph(self) -> "Scenario":
+    def _validate_graph(self) -> Scenario:
         ids = {n.id for n in self.nodes}
         if len(ids) != len(self.nodes):
             raise ValueError("Scenario has duplicate node ids")
+
+        # start 노드 존재 및 단일성 검증
+        start_nodes = [n for n in self.nodes if n.type == "start"]
+        if not start_nodes:
+            raise ValueError("Scenario must have exactly one 'start' node")
+        if len(start_nodes) > 1:
+            raise ValueError(
+                f"Scenario must have exactly one 'start' node, got {len(start_nodes)}: "
+                f"{[n.id for n in start_nodes]}"
+            )
+        # entry 는 start 노드를 가리켜야 함
+        if self.entry != start_nodes[0].id:
+            raise ValueError(
+                f"entry must point to the 'start' node ('{start_nodes[0].id}'), got '{self.entry}'"
+            )
+
         if self.entry not in ids:
             raise ValueError(f"entry node '{self.entry}' not in nodes")
         if self.fallback_node and self.fallback_node not in ids:

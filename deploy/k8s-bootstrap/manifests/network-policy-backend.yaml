@@ -1,0 +1,190 @@
+# Phase N (N1.6, NG3) — backend NetworkPolicy ingress 강화
+#
+# 목표:
+#   - /api/v1/stream/* 및 portal-protected 엔드포인트를 portal namespace 에서만 접근 허용.
+#   - 기존 ALB Ingress Controller, Prometheus scraper, vbgw 등 기존 ingress 는 유지.
+#   - AM basic auth endpoint 는 backend → AM 방향 (egress) — 별도 Egress 규칙으로.
+#
+# 네임스페이스 레이블 가이드 (적용 필요):
+#   kubectl label ns agentoe   kubernetes.io/metadata.name=agentoe
+#   kubectl label ns vbgw      kubernetes.io/metadata.name=vbgw
+#   kubectl label ns portal    kubernetes.io/metadata.name=portal
+#   kubectl label ns monitoring kubernetes.io/metadata.name=monitoring
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-ingress
+  namespace: agentoe
+  labels:
+    app.kubernetes.io/part-of: agentoe
+    app.kubernetes.io/managed-by: kubectl
+    phase: "N"
+spec:
+  podSelector:
+    matchLabels:
+      app: agentoe-backend
+
+  policyTypes:
+    - Ingress
+
+  ingress:
+    # ── ALB Ingress Controller (AWS LBC) ────────────────────────────────────
+    # ALB health check / 실제 HTTP 트래픽 — kube-system 에서 발생
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8000
+
+    # ── vbgw-bridge (gRPC :50051) ────────────────────────────────────────────
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vbgw
+          podSelector:
+            matchLabels:
+              app: vbgw-bridge
+      ports:
+        - protocol: TCP
+          port: 50051
+
+    # ── Prometheus scraper (metrics :8000/metrics — no auth) ──────────────
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8000
+
+    # ── Operations Portal (Phase N) — portal namespace 만 허용 ────────────
+    # /api/v1/stream/*, /api/v1/auth/portal/*, /api/v1/admin/alerts/*
+    # portal pod 의 nginx reverse proxy 에서 backend 로 upstream.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: portal
+          podSelector:
+            matchLabels:
+              app: agentoe-portal
+      ports:
+        - protocol: TCP
+          port: 8000
+
+---
+# ── Staging 버전 (namespace: agentoe-staging) ────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-ingress
+  namespace: agentoe-staging
+  labels:
+    app.kubernetes.io/part-of: agentoe
+    app.kubernetes.io/managed-by: kubectl
+    phase: "N"
+spec:
+  podSelector:
+    matchLabels:
+      app: agentoe-backend
+
+  policyTypes:
+    - Ingress
+
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8000
+
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vbgw
+          podSelector:
+            matchLabels:
+              app: vbgw-bridge
+      ports:
+        - protocol: TCP
+          port: 50051
+
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8000
+
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: portal-staging
+          podSelector:
+            matchLabels:
+              app: agentoe-portal
+      ports:
+        - protocol: TCP
+          port: 8000
+
+---
+# ── backend → Alertmanager egress (am_poller + AM proxy) ────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-egress-alertmanager
+  namespace: agentoe
+  labels:
+    app.kubernetes.io/part-of: agentoe
+    phase: "N"
+spec:
+  podSelector:
+    matchLabels:
+      app: agentoe-backend
+
+  policyTypes:
+    - Egress
+
+  egress:
+    # Alertmanager :9093
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: alertmanager
+      ports:
+        - protocol: TCP
+          port: 9093
+    # Redis (같은 네임스페이스 또는 공용)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # MongoDB Atlas (외부) — CIDR 기반 (Atlas IP allowlist 별도 관리)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 27017

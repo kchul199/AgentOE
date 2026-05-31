@@ -7,6 +7,7 @@
   - ScenarioLimits 범위 제약
   - extra=forbid 검증
 """
+
 from __future__ import annotations
 
 import pytest
@@ -202,8 +203,14 @@ class TestBranchScenario:
         s = full_scenario_with_all_node_types()
         types_present = {type(n).__name__ for n in s.nodes}
         assert {
-            "LLMNode", "WaitNode", "IntentNode", "BranchNode",
-            "ToolNode", "ContextUpdateNode", "TransferNode", "EndNode",
+            "LLMNode",
+            "WaitNode",
+            "IntentNode",
+            "BranchNode",
+            "ToolNode",
+            "ContextUpdateNode",
+            "TransferNode",
+            "EndNode",
         } <= types_present
 
 

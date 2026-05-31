@@ -2,18 +2,19 @@
 BaseConnector SDK — AgentOE 외부 시스템 연동 추상 기반 클래스
 04_외부시스템_커넥터_SDK_가이드_v7 명세 기반
 """
+
 import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-class ConnectorStatus(str, Enum):
+class ConnectorStatus(StrEnum):
     OK = "ok"
     ERROR = "error"
     TIMEOUT = "timeout"
@@ -23,7 +24,7 @@ class ConnectorStatus(str, Enum):
 
 @dataclass
 class ConnectorRequest:
-    action: str                          # e.g. "customer.read"
+    action: str  # e.g. "customer.read"
     payload: dict[str, Any]
     session_id: str
     tenant_id: str
@@ -46,8 +47,14 @@ class MaskingEngine:
     """민감정보 자동 마스킹 엔진"""
 
     SENSITIVE_KEYS = {
-        "account_number", "card_number", "ssn", "password",
-        "주민번호", "계좌번호", "카드번호", "비밀번호",
+        "account_number",
+        "card_number",
+        "ssn",
+        "password",
+        "주민번호",
+        "계좌번호",
+        "카드번호",
+        "비밀번호",
     }
 
     @classmethod
@@ -64,7 +71,7 @@ class MaskingEngine:
                 masked_fields.append(key)
             elif isinstance(value, dict):
                 sub_masked, sub_fields = cls.mask(value)
-                masked[key] = sub_masked
+                masked[key] = sub_masked  # type: ignore[assignment]
                 masked_fields.extend(f"{key}.{f}" for f in sub_fields)
             else:
                 masked[key] = value
@@ -104,7 +111,8 @@ class BaseConnector(ABC):
         if request.action not in self.ALLOWED_ACTIONS:
             logger.warning(
                 "Connector action blocked by whitelist: action=%s connector=%s",
-                request.action, self.connector_id
+                request.action,
+                self.connector_id,
             )
             return ConnectorResponse(
                 status=ConnectorStatus.UNAUTHORIZED,
@@ -128,8 +136,7 @@ class BaseConnector(ABC):
             masked_data, masked_fields = self._masking.mask(result_data)
 
             logger.info(
-                "Connector call success: action=%s latency=%.0fms",
-                request.action, latency_ms
+                "Connector call success: action=%s latency=%.0fms", request.action, latency_ms
             )
             return ConnectorResponse(
                 status=ConnectorStatus.OK,
@@ -139,11 +146,10 @@ class BaseConnector(ABC):
                 masked_fields=masked_fields,
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             latency_ms = (time.monotonic() - start) * 1000
             logger.error(
-                "Connector timeout: action=%s timeout=%.0fms",
-                request.action, request.timeout_ms
+                "Connector timeout: action=%s timeout=%.0fms", request.action, request.timeout_ms
             )
             return ConnectorResponse(
                 status=ConnectorStatus.TIMEOUT,

@@ -18,10 +18,12 @@
 
 Circuit Breaker는 ExternalTimeoutError를 failure로 계산해야 한다.
 """
+
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Literal
+from collections.abc import Awaitable
+from typing import Any, Literal
 
 try:
     import httpx
@@ -67,11 +69,11 @@ async def with_timeout(
     t = override_s if override_s is not None else _timeout_for(service)
     try:
         return await asyncio.wait_for(coro, timeout=t)
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         raise ExternalTimeoutError(service, t) from e
 
 
-def http_timeout(service: ServiceName = SVC_DEFAULT) -> "httpx.Timeout":
+def http_timeout(service: ServiceName = SVC_DEFAULT) -> httpx.Timeout:
     """
     httpx.Timeout 헬퍼 — connect/read/write/pool을 config에서 읽어온다.
     서비스별 read cutoff도 반영하여 커넥션/전체 상한이 일관되게 동작.

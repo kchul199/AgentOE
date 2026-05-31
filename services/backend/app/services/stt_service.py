@@ -2,6 +2,7 @@
 STT Service — Groq Whisper Large v3 Turbo
 Circuit Breaker 패턴 적용, 장애 시 Fallback 처리
 """
+
 import logging
 import time
 from dataclasses import dataclass
@@ -42,11 +43,13 @@ class STTService:
         if self._client is None:
             try:
                 from groq import AsyncGroq
+
                 from app.core.config import settings
+
                 self._client = AsyncGroq(api_key=settings.GROQ_API_KEY)
             except ImportError:
                 logger.warning("groq package not installed — STT unavailable")
-                raise RuntimeError("groq package not installed")
+                raise RuntimeError("groq package not installed") from None
         return self._client
 
     async def transcribe(self, audio_bytes: bytes, language: str = "ko") -> STTResult:
@@ -56,8 +59,9 @@ class STTService:
         RuntimeError(패키지 미설치)는 excluded_exceptions이므로 CB failure_count에
         포함되지 않습니다. 그 외 모든 예외는 failure_count를 증가시킵니다.
         """
-        from app.core.config import settings
         import io
+
+        from app.core.config import settings
 
         start = time.monotonic()
 
@@ -86,7 +90,8 @@ class STTService:
         )
         logger.info(
             "STT complete: %.0fms, text='%s...'",
-            result.duration_ms, result.text[:30],
+            result.duration_ms,
+            result.text[:30],
         )
         return result
 

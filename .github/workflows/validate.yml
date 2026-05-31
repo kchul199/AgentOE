@@ -21,6 +21,7 @@ jobs:
       backend:   ${{ steps.f.outputs.backend }}
       vbgw:      ${{ steps.f.outputs.vbgw }}
       frontend:  ${{ steps.f.outputs.frontend }}
+      portal:    ${{ steps.f.outputs.portal }}
       helm:      ${{ steps.f.outputs.helm }}
       terraform: ${{ steps.f.outputs.terraform }}
       docker:    ${{ steps.f.outputs.docker }}
@@ -34,6 +35,10 @@ jobs:
               - 'services/backend/**'
             frontend:
               - 'services/frontend/**'
+            portal:
+              - 'services/ops-portal/**'
+              - 'deploy/helm/agentoe-portal/**'
+              - 'deploy/helm/values/*/portal.values.yaml'
             vbgw_ai:
               - 'services/vbgw-ai/**'
             vbgw_bridge:
@@ -65,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        chart: [agentoe-backend, agentoe-frontend, vbgw]
+        chart: [agentoe-backend, agentoe-frontend, vbgw, agentoe-portal]
         env: [staging, prod]
         include:
           - chart: agentoe-backend
@@ -74,6 +79,8 @@ jobs:
             values_basename: frontend
           - chart: vbgw                     # multi-deployment (orchestrator + bridge + freeswitch)
             values_basename: vbgw
+          - chart: agentoe-portal           # Phase N — 통합 운영포탈
+            values_basename: portal
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-helm
@@ -175,6 +182,7 @@ jobs:
           - services/vbgw-ai/Dockerfile
           - services/vbgw-bridge/Dockerfile
           - services/vbgw-orchestrator/Dockerfile
+          - services/ops-portal/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: hadolint/hadolint-action@v3.1.0

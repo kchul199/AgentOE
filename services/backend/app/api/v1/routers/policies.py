@@ -1,7 +1,10 @@
 """Policy Gate CRUD + evaluate API."""
+
 import uuid
 from typing import Annotated
+
 from fastapi import APIRouter, Depends, status
+
 from app.core.auth import TenantContext, get_current_tenant, require_roles
 from app.domain.policy_gate import PolicyGate, PolicyLevel
 from app.repositories.policy_repository import PolicyRepository

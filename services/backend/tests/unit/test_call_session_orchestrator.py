@@ -4,20 +4,22 @@ CallSessionOrchestrator 단위 테스트
 WebSocket 객체 없이 순수 비즈니스 로직만 검증한다.
 AIPipeline / TransferService / SessionRepository 는 AsyncMock으로 교체.
 """
+
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.domain.circuit_breaker import CircuitBreakerOpenError
 from app.domain.policy_gate import PolicyLevel
 from app.domain.session_fsm import SessionFSM, SessionState
 from app.services.ai_pipeline import PipelineResult
 from app.services.call_session_orchestrator import (
+    MAX_HISTORY_IN_MEMORY,
+    PIPELINE_FAILURE_THRESHOLD,
     CallSessionOrchestrator,
     OutboundEvent,
-    PIPELINE_FAILURE_THRESHOLD,
-    MAX_HISTORY_IN_MEMORY,
     _transfer_priority,
     restore_or_create_orchestrator,
 )
@@ -28,8 +30,8 @@ from app.services.transfer_service import (
     TransferStatus,
 )
 
-
 # ── 픽스처 ────────────────────────────────────────────────────────────────────
+
 
 def _make_repo() -> AsyncMock:
     repo = AsyncMock()
@@ -43,17 +45,17 @@ def _make_repo() -> AsyncMock:
 
 
 def _make_pipeline_result(**kwargs) -> PipelineResult:
-    defaults = dict(
-        stt_text="테스트 발화",
-        llm_text="AI 응답입니다.",
-        tts_audio=b"\x00\x01\x02",
-        policy_level="G1",
-        policy_allowed=True,
-        latency={"total_ms": 800.0},
-        filler_triggered=False,
-        degraded=False,
-        degraded_stage=None,
-    )
+    defaults = {
+        "stt_text": "테스트 발화",
+        "llm_text": "AI 응답입니다.",
+        "tts_audio": b"\x00\x01\x02",
+        "policy_level": "G1",
+        "policy_allowed": True,
+        "latency": {"total_ms": 800.0},
+        "filler_triggered": False,
+        "degraded": False,
+        "degraded_stage": None,
+    }
     defaults.update(kwargs)
     return PipelineResult(**defaults)
 
@@ -72,10 +74,12 @@ def _make_orchestrator(repo=None, fsm=None, history=None) -> CallSessionOrchestr
 
 # ── OutboundEvent ─────────────────────────────────────────────────────────────
 
+
 class TestOutboundEvent:
     def test_to_json_includes_event_key(self):
         evt = OutboundEvent("stt_result", {"text": "hello", "is_final": True})
         import json
+
         data = json.loads(evt.to_json())
         assert data["event"] == "stt_result"
         assert data["text"] == "hello"
@@ -83,11 +87,13 @@ class TestOutboundEvent:
     def test_empty_payload(self):
         evt = OutboundEvent("pong")
         import json
+
         data = json.loads(evt.to_json())
         assert data == {"event": "pong"}
 
 
 # ── _transfer_priority ────────────────────────────────────────────────────────
+
 
 class TestTransferPriority:
     def test_g4_policy_is_high_priority(self):
@@ -104,6 +110,7 @@ class TestTransferPriority:
 
 
 # ── handle_control ────────────────────────────────────────────────────────────
+
 
 class TestHandleControl:
     @pytest.mark.asyncio
@@ -163,6 +170,7 @@ class TestHandleControl:
 
 # ── handle_audio ──────────────────────────────────────────────────────────────
 
+
 class TestHandleAudio:
     @pytest.mark.asyncio
     async def test_audio_ignored_when_not_listening(self):
@@ -199,22 +207,23 @@ class TestHandleAudio:
 
 # ── _run_pipeline — 정상 경로 ─────────────────────────────────────────────────
 
+
 class TestRunPipeline:
     @pytest.mark.asyncio
     async def test_normal_path_event_order(self):
         orc = _make_orchestrator()
         orc.fsm.transition(SessionState.LISTENING)
 
-        mock_result = _make_pipeline_result(tts_audio=b"\xAB\xCD")
+        mock_result = _make_pipeline_result(tts_audio=b"\xab\xcd")
         with patch.object(orc._pipeline, "process", new=AsyncMock(return_value=mock_result)):
             events = await orc._run_pipeline(b"\x00" * 100)
 
         names = [e.name for e in events]
-        assert "stt_result"    in names
-        assert "llm_chunk"     in names
-        assert "tts_ready"     in names
+        assert "stt_result" in names
+        assert "llm_chunk" in names
+        assert "tts_ready" in names
         assert "pipeline_done" in names
-        assert "state_change"  in names
+        assert "state_change" in names
 
     @pytest.mark.asyncio
     async def test_no_tts_audio_skips_tts_event(self):
@@ -239,8 +248,8 @@ class TestRunPipeline:
             await orc._run_pipeline(b"\x00" * 100)
 
         assert len(orc.history) == 2
-        assert orc.history[0] == {"role": "user",      "content": "질문"}
-        assert orc.history[1] == {"role": "assistant",  "content": "답변"}
+        assert orc.history[0] == {"role": "user", "content": "질문"}
+        assert orc.history[1] == {"role": "assistant", "content": "답변"}
 
     @pytest.mark.asyncio
     async def test_history_trimmed_to_max(self):
@@ -272,6 +281,7 @@ class TestRunPipeline:
 
 
 # ── _run_pipeline — 에러 경로 ─────────────────────────────────────────────────
+
 
 class TestRunPipelineErrors:
     @pytest.mark.asyncio
@@ -305,7 +315,6 @@ class TestRunPipelineErrors:
         orc._pipeline_failure_count = PIPELINE_FAILURE_THRESHOLD - 1
 
         transfer_result = TransferResult(
-            session_id="sess-001",
             status=TransferStatus.FAILED,
             message="이관 실패",
             fallback_action=TransferFallback.AI_RESUME,
@@ -323,17 +332,15 @@ class TestRunPipelineErrors:
 
 # ── 정책 차단 ─────────────────────────────────────────────────────────────────
 
+
 class TestPolicyBlocking:
     @pytest.mark.asyncio
     async def test_g4_policy_triggers_transfer(self):
         orc = _make_orchestrator()
         orc.fsm.transition(SessionState.LISTENING)
 
-        mock_result = _make_pipeline_result(
-            policy_level="G4", policy_allowed=False, tts_audio=None
-        )
+        mock_result = _make_pipeline_result(policy_level="G4", policy_allowed=False, tts_audio=None)
         transfer_result = TransferResult(
-            session_id="sess-001",
             status=TransferStatus.FAILED,
             message="이관 실패",
             fallback_action=TransferFallback.AI_RESUME,
@@ -352,9 +359,7 @@ class TestPolicyBlocking:
         orc = _make_orchestrator()
         orc.fsm.transition(SessionState.LISTENING)
 
-        mock_result = _make_pipeline_result(
-            policy_level="G1", policy_allowed=False, tts_audio=None
-        )
+        mock_result = _make_pipeline_result(policy_level="G1", policy_allowed=False, tts_audio=None)
         with patch.object(orc._pipeline, "process", new=AsyncMock(return_value=mock_result)):
             events = await orc._run_pipeline(b"\x00" * 100)
 
@@ -365,6 +370,7 @@ class TestPolicyBlocking:
 
 
 # ── end_session ────────────────────────────────────────────────────────────────
+
 
 class TestEndSession:
     @pytest.mark.asyncio
@@ -401,6 +407,7 @@ class TestEndSession:
 
 # ── restore_or_create_orchestrator ────────────────────────────────────────────
 
+
 class TestRestoreOrCreate:
     @pytest.mark.asyncio
     async def test_new_session_returns_connected_event(self):
@@ -422,9 +429,7 @@ class TestRestoreOrCreate:
     @pytest.mark.asyncio
     async def test_ended_session_returns_none(self):
         repo = _make_repo()
-        repo.restore_hot_state = AsyncMock(
-            return_value={"status": "ENDED"}
-        )
+        repo.restore_hot_state = AsyncMock(return_value={"status": "ENDED"})
 
         orc, events = await restore_or_create_orchestrator(
             session_id="ended-sess",
@@ -438,14 +443,16 @@ class TestRestoreOrCreate:
     @pytest.mark.asyncio
     async def test_reconnect_returns_reconnected_event(self):
         repo = _make_repo()
-        repo.restore_hot_state = AsyncMock(return_value={
-            "status": "LISTENING",
-            "fsm_snapshot": {"state": "LISTENING", "events": []},
-            "history": [
-                {"role": "user",      "content": "안녕"},
-                {"role": "assistant",  "content": "반갑습니다"},
-            ],
-        })
+        repo.restore_hot_state = AsyncMock(
+            return_value={
+                "status": "LISTENING",
+                "fsm_snapshot": {"state": "LISTENING", "events": []},
+                "history": [
+                    {"role": "user", "content": "안녕"},
+                    {"role": "assistant", "content": "반갑습니다"},
+                ],
+            }
+        )
 
         orc, events = await restore_or_create_orchestrator(
             session_id="old-sess",
@@ -463,11 +470,13 @@ class TestRestoreOrCreate:
     @pytest.mark.asyncio
     async def test_reconnect_unsafe_state_reverts_to_listening(self):
         repo = _make_repo()
-        repo.restore_hot_state = AsyncMock(return_value={
-            "status": "PROCESSING",
-            "fsm_snapshot": {"state": "PROCESSING", "events": []},
-            "history": [],
-        })
+        repo.restore_hot_state = AsyncMock(
+            return_value={
+                "status": "PROCESSING",
+                "fsm_snapshot": {"state": "PROCESSING", "events": []},
+                "history": [],
+            }
+        )
 
         orc, _ = await restore_or_create_orchestrator(
             session_id="sess",
@@ -482,11 +491,13 @@ class TestRestoreOrCreate:
     @pytest.mark.asyncio
     async def test_broken_snapshot_falls_back_to_idle(self):
         repo = _make_repo()
-        repo.restore_hot_state = AsyncMock(return_value={
-            "status": "LISTENING",
-            "fsm_snapshot": {"state": "INVALID_STATE_XYZ", "events": []},
-            "history": [],
-        })
+        repo.restore_hot_state = AsyncMock(
+            return_value={
+                "status": "LISTENING",
+                "fsm_snapshot": {"state": "INVALID_STATE_XYZ", "events": []},
+                "history": [],
+            }
+        )
 
         orc, events = await restore_or_create_orchestrator(
             session_id="sess",

@@ -6,11 +6,12 @@ v2 패치 요약:
   - Graceful Shutdown 핸들러 등록 (SIGTERM → readiness drain → 강제 종료)
   - 미들웨어 순서: Logging(최외곽) → KillSwitch → RateLimit → Admission → 애플리케이션
 """
+
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -22,14 +23,17 @@ from app.core.exceptions import AgentOEBaseError
 from app.core.graceful_shutdown import register_signal_handlers, shutdown_manager
 from app.core.logging import setup_logging
 from app.core.redis_client import close_redis, init_redis
+from app.domain.sse_broadcaster import init_broadcaster
 from app.grpc_server import GrpcServerLifecycle
 from app.middleware.admission_middleware import AdmissionControlMiddleware
 from app.middleware.http_metrics_middleware import HTTPMetricsMiddleware
 from app.middleware.idempotency_middleware import IdempotencyMiddleware
 from app.middleware.kill_switch_middleware import KillSwitchMiddleware
 from app.middleware.logging_middleware import LoggingMiddleware
+from app.middleware.portal_cookie_middleware import PortalCookieMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware
 from app.repositories.session_repository import SessionRepository
+from app.workers.am_poller import init_am_poller
 
 logger = structlog.get_logger()
 
@@ -51,6 +55,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await grpc_lifecycle.start()
         app.state.grpc_lifecycle = grpc_lifecycle
 
+    # Phase N (N1.4) — SSE broadcaster + AM poller (background asyncio tasks)
+    broadcaster = init_broadcaster()
+    await broadcaster.start()
+    app.state.broadcaster = broadcaster
+
+    am_enabled = getattr(settings, "AM_POLLER_ENABLED", True)
+    am_poller = init_am_poller()
+    if am_enabled:
+        await am_poller.start()
+    app.state.am_poller = am_poller
+
     # Readiness 프로브(/startupz)가 "초기화 완료"를 감지하도록 마지막에 표시
     mark_startup_complete()
     logger.info(
@@ -64,17 +79,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
+        # SSE broadcaster + AM poller 종료 (Redis/Mongo 닫기 전)
+        try:
+            await app.state.broadcaster.stop()
+        except Exception as e:
+            logger.error("broadcaster_shutdown_error", error=str(e))
+        if am_enabled:
+            try:
+                await app.state.am_poller.stop()
+            except Exception as e:
+                logger.error("am_poller_shutdown_error", error=str(e))
+
         # gRPC graceful drain — HTTP/Redis 닫기 전에 진행 중 통화 수용 시간 확보.
         if grpc_lifecycle is not None:
             try:
                 await grpc_lifecycle.stop()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.error("grpc_shutdown_error", error=str(e))
 
         # Graceful: 신호를 못 받았더라도 drain을 시도 (uvicorn exit path)
         try:
             await shutdown_manager.drain()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("shutdown_drain_error", error=str(e))
         await close_redis()
         await close_db()
@@ -93,9 +119,16 @@ app = FastAPI(
 # ── CORS (좁힌 설정) ────────────────────────────────────────────────────────
 # 과거 allow_methods=['*'], allow_headers=['*']은 CSRF/사전요청 우회 위험.
 # 명시 목록으로 좁히고 exposed headers 선언.
+# Phase N (N1.9) — PORTAL_ORIGIN 을 CORS_ORIGINS 에 포함 (SSE + auth 쿠키 지원).
+# PORTAL_ORIGIN 은 내부 ALB DNS (http://portal.internal:4000 등) — 운영 환경에 맞게 설정.
+_cors_origins = list(settings.CORS_ORIGINS)
+_portal_origin = getattr(settings, "PORTAL_ORIGIN", "")
+if _portal_origin and _portal_origin not in _cors_origins:
+    _cors_origins.append(_portal_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
@@ -104,6 +137,9 @@ app.add_middleware(
         "X-Request-Id",
         "X-Tenant-Id",
         "X-Trace-Id",
+        "X-CSRF-Token",  # Phase N — portal CSRF double-submit
+        "X-Env-Target",  # Phase N — env switcher
+        "Last-Event-ID",  # Phase N — SSE reconnect catch-up
     ],
     expose_headers=["X-Request-Id", "X-Trace-Id"],
     max_age=600,
@@ -115,15 +151,16 @@ app.add_middleware(
 #   * Idempotency 가 RateLimit 안쪽 — 429 는 캐시하지 않는다
 #   * Admission 안쪽 — 동시성 lease 와 dedup 모두 적용
 app.add_middleware(AdmissionControlMiddleware)  # inner-most before router
+app.add_middleware(PortalCookieMiddleware)  # portal_access cookie → Authorization header
 app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(KillSwitchMiddleware)
-app.add_middleware(LoggingMiddleware)           # 로그/트레이스 진입
-app.add_middleware(HTTPMetricsMiddleware)       # outer-most (SLO timing — 모든 inner 비용 포함)
+app.add_middleware(LoggingMiddleware)  # 로그/트레이스 진입
+app.add_middleware(HTTPMetricsMiddleware)  # outer-most (SLO timing — 모든 inner 비용 포함)
 
 
 @app.exception_handler(AgentOEBaseError)
-async def agentoe_error_handler(request, exc: AgentOEBaseError) -> JSONResponse:
+async def agentoe_error_handler(request: Request, exc: AgentOEBaseError) -> JSONResponse:
     """Global handler for AgentOE custom exceptions."""
     return JSONResponse(
         status_code=exc.http_status,

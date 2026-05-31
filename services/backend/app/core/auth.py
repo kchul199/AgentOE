@@ -1,9 +1,10 @@
 """JWT authentication and tenant context middleware."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 import structlog
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -20,17 +21,34 @@ class TenantContext(BaseModel):
     tenant_id: str
     client_id: str
     roles: list[str] = []
+    # Phase N (NG2): 토큰 issuer 격리. portal-protected route 는 require_portal_role() 가
+    # issuer == "agentoe-portal" 인지 강제. 기본값은 backward-compat ("agentoe-api").
+    issuer: str = "agentoe-api"
 
 
-def create_access_token(tenant_id: str, client_id: str, roles: list[str]) -> str:
-    """Create a signed JWT access token."""
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
+def create_access_token(
+    tenant_id: str,
+    client_id: str,
+    roles: list[str],
+    *,
+    issuer: str = "agentoe-api",
+    expires_minutes: int | None = None,
+) -> str:
+    """Create a signed JWT access token.
+
+    Phase N (NG2): `issuer` 파라미터로 토큰 출처 식별. portal_users 발급은
+    `issuer="agentoe-portal"` 로 호출 (auth_portal.py, N1.7). 기존 호출처는
+    기본값 그대로 두면 backward-compat.
+    """
+    minutes = expires_minutes if expires_minutes is not None else settings.JWT_EXPIRE_MINUTES
+    expire = datetime.now(UTC) + timedelta(minutes=minutes)
     payload = {
+        "iss": issuer,
         "sub": client_id,
         "tenant_id": tenant_id,
         "roles": roles,
         "exp": expire,
-        "iat": datetime.now(timezone.utc),
+        "iat": datetime.now(UTC),
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
@@ -110,32 +128,111 @@ async def get_current_tenant(
                 client_id=client_id,
                 path=request.url.path,
             )
-            raise AuthorizationError(
-                "X-Tenant-Id header does not match token claim"
-            )
+            raise AuthorizationError("X-Tenant-Id header does not match token claim")
 
     return TenantContext(
         tenant_id=tenant_id,
         client_id=client_id,
         roles=payload.get("roles", []),
+        # Phase N (NG2): issuer claim — portal-protected route 가 격리 검증에 사용.
+        # 기본값 "agentoe-api" 는 기존 토큰 (iss claim 없음) backward-compat.
+        issuer=payload.get("iss", "agentoe-api"),
     )
 
 
-def require_roles(*required_roles: str):
-    """Dependency factory: require specific roles."""
-    async def check_roles(tenant: Annotated[TenantContext, Depends(get_current_tenant)]) -> TenantContext:
+def require_roles(*required_roles: str) -> Any:
+    """Dependency factory: require specific roles.
+
+    issuer 검증은 하지 않음 — 기존 라우터 backward compat.
+    portal-protected route 는 `require_portal_role()` 을 사용.
+    """
+
+    async def check_roles(
+        tenant: Annotated[TenantContext, Depends(get_current_tenant)],
+    ) -> TenantContext:
         if not any(role in tenant.roles for role in required_roles):
             raise AuthorizationError(f"Required roles: {required_roles}")
         return tenant
+
     return check_roles
+
+
+# ── Portal-protected RBAC (NG2) ──────────────────────────────────────────────
+#
+# 운영포탈 라우터 전용 가드. 자동 role 매핑 폐기 — portal:* role 은 오직
+# portal_users 컬렉션에서 발급된 토큰 (iss="agentoe-portal") 에만 인정.
+# 기존 admin/super_admin 토큰이 portal SSE/audit drill 권한을 우회 획득하는
+# 격리 누수를 차단.
+
+PORTAL_ISSUER: str = "agentoe-portal"
+PORTAL_ROLES: frozenset[str] = frozenset(
+    {
+        "portal:viewer",
+        "portal:operator",
+        "portal:admin",
+    }
+)
+
+
+def require_portal_role(*required_roles: str) -> Any:
+    """Dependency factory: portal-issuer 토큰 + required portal:* role 중 1개.
+
+    검증 순서:
+      1) issuer == "agentoe-portal" 인지 (NG2 — 자동 매핑 폐기).
+      2) tenant.roles 가 required_roles 중 하나 OR PLATFORM_ADMIN_ROLES 보유.
+
+    PLATFORM_ADMIN_ROLES 우회는 issuer 가 portal 인 경우에만 유지 — portal_users
+    컬렉션에 platform_admin 도 있을 수 있다는 drop-in 호환.
+    """
+
+    async def check_portal(
+        tenant: Annotated[TenantContext, Depends(get_current_tenant)],
+    ) -> TenantContext:
+        if tenant.issuer != PORTAL_ISSUER:
+            logger.warning(
+                "portal_route_non_portal_issuer",
+                issuer=tenant.issuer,
+                client_id=tenant.client_id,
+                required_roles=required_roles,
+            )
+            raise AuthorizationError(
+                f"Portal-protected endpoint requires issuer={PORTAL_ISSUER!r} token"
+            )
+
+        if any(r in PLATFORM_ADMIN_ROLES for r in tenant.roles):
+            return tenant
+        if any(r in tenant.roles for r in required_roles):
+            return tenant
+
+        logger.warning(
+            "portal_role_denied",
+            client_id=tenant.client_id,
+            actual_roles=tenant.roles,
+            required_roles=required_roles,
+        )
+        raise AuthorizationError(f"Required portal roles: {required_roles}")
+
+    return check_portal
 
 
 # ── Tenant Ownership Enforcement ─────────────────────────────────────────────
 #
 # 크로스테넌트 IDOR 방지용 공용 헬퍼. 라우터에서 `if resource.tenant_id != tenant_id`
 # 반복 패턴을 제거한다. platform_admin 역할은 전 테넌트 접근 허용(감사로그 남김).
+#
+# Phase N (NG2): super_admin, portal:admin 추가. portal:admin 은 portal-issuer
+# 토큰의 경우만 — assert_tenant_ownership 내부에서 issuer 검증 안 함 (라우터
+# 데코레이터 require_portal_role 이 이미 portal issuer 보장). 따라서 portal:admin
+# 이 PLATFORM_ADMIN_ROLES 에 들어가도 portal-protected route 통과 후에만 사용됨.
 
-PLATFORM_ADMIN_ROLES: frozenset[str] = frozenset({"platform_admin", "sre_admin"})
+PLATFORM_ADMIN_ROLES: frozenset[str] = frozenset(
+    {
+        "platform_admin",
+        "sre_admin",
+        "super_admin",  # Phase N — 기존에 누락. plan §2.3.
+        "portal:admin",  # Phase N — portal-issuer 토큰의 portal:admin.
+    }
+)
 
 
 def assert_tenant_ownership(
@@ -157,10 +254,7 @@ def assert_tenant_ownership(
         session = await repo.get_by_id(session_id)
         assert_tenant_ownership(session, tenant, resource_type="session", resource_id=session_id)
     """
-    if isinstance(resource, dict):
-        owner = resource.get(field)
-    else:
-        owner = getattr(resource, field, None)
+    owner = resource.get(field) if isinstance(resource, dict) else getattr(resource, field, None)
 
     if owner is None:
         # 명시적 fail-closed: 리소스에 tenant_id 없으면 거부

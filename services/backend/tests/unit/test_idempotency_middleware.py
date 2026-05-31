@@ -12,6 +12,7 @@
   9. Redis 장애 fail-open        → 핸들러 정상 실행
  10. 비-mutating (GET)           → 미들웨어 통과
 """
+
 from __future__ import annotations
 
 import os
@@ -29,10 +30,15 @@ os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/gcp.json")
 
 # 외부 모듈 스텁
 for _mod in [
-    "motor", "motor.motor_asyncio",
-    "pymongo", "pymongo.errors",
-    "groq", "google.cloud", "google.cloud.texttospeech",
-    "google.cloud.texttospeech_v1", "grpc",
+    "motor",
+    "motor.motor_asyncio",
+    "pymongo",
+    "pymongo.errors",
+    "groq",
+    "google.cloud",
+    "google.cloud.texttospeech",
+    "google.cloud.texttospeech_v1",
+    "grpc",
 ]:
     if _mod not in sys.modules:
         sys.modules[_mod] = _mock.MagicMock()
@@ -45,7 +51,6 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from app.core import idempotency as idem_mod
 from app.core.idempotency import (
     AcquireResult,
     build_idem_key,
@@ -53,16 +58,24 @@ from app.core.idempotency import (
 )
 from app.middleware.idempotency_middleware import IdempotencyMiddleware
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
 def fake_redis(monkeypatch):
-    """fakeredis 로 실제 SETNX/GET 을 흉내."""
-    r = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr("app.core.idempotency.get_redis", lambda: r)
-    return r
+    """fakeredis 로 실제 SETNX/GET 을 흉내.
+
+    TestClient 는 호출마다 독립 이벤트 루프를 생성하므로 FakeRedis 를 미리 만들면
+    "bound to a different event loop" RuntimeError 가 발생한다.
+    FakeServer 를 공유 상태 저장소로 두고, get_redis() 마다 새 FakeRedis 인스턴스를
+    반환하면 각 인스턴스가 호출 시점 이벤트 루프에 바인딩되면서도 데이터는 공유된다.
+    """
+    server = fakeredis.FakeServer()
+    monkeypatch.setattr(
+        "app.core.idempotency.get_redis",
+        lambda: fakeredis.aioredis.FakeRedis(server=server, decode_responses=True),
+    )
+    return server
 
 
 @pytest.fixture
@@ -135,12 +148,15 @@ def test_missing_header_on_required_path_400(client, handler_calls, monkeypatch)
 # ── 3. 잘못된 키 형식 ────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("bad_key", [
-    "short",          # 길이 < 8
-    "a" * 129,        # 길이 > 128
-    "has space",      # 공백
-    "key!bad@chars",  # 허용문자(영숫자/-/_) 외 특수문자
-])
+@pytest.mark.parametrize(
+    "bad_key",
+    [
+        "short",  # 길이 < 8
+        "a" * 129,  # 길이 > 128
+        "has space",  # 공백
+        "key!bad@chars",  # 허용문자(영숫자/-/_) 외 특수문자
+    ],
+)
 def test_invalid_key_shape_400(client, handler_calls, bad_key):
     r = client.post(
         "/api/v1/scenarios/s1/publish",
@@ -256,7 +272,6 @@ def test_5xx_releases_slot_allowing_retry(client, handler_calls, fake_redis):
 @pytest.mark.asyncio
 async def test_redis_failure_fails_open(monkeypatch):
     """redis.set 이 raise → 미들웨어는 일반 요청처럼 통과."""
-    from app.middleware import idempotency_middleware as mm
     from app.core import idempotency as idem
 
     class _BrokenRedis:

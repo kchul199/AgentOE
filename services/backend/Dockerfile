@@ -41,7 +41,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     UVICORN_WORKERS=2 \
     UVICORN_HOST=0.0.0.0 \
-    UVICORN_PORT=8000
+    UVICORN_PORT=8000 \
+    # N1.12 — SSE 포함 동시 HTTP 연결 상한 (0 = 무제한).
+    # prod Helm values 에서 UVICORN_LIMIT_CONCURRENCY=500 으로 오버라이드.
+    UVICORN_LIMIT_CONCURRENCY=0
 
 # 비-root user (Helm 의 runAsUser=10001 과 동일)
 RUN groupadd --system --gid 10001 agentoe \
@@ -68,7 +71,21 @@ EXPOSE 8000
 
 # tini = PID 1 → SIGTERM → uvicorn graceful shutdown 정상 동작.
 ENTRYPOINT ["tini", "--"]
-CMD ["sh", "-c", "exec uvicorn app.main:app --host ${UVICORN_HOST} --port ${UVICORN_PORT} --workers ${UVICORN_WORKERS} --proxy-headers --forwarded-allow-ips='*'"]
+# UVICORN_LIMIT_CONCURRENCY=0 → --limit-concurrency 플래그 생략 (무제한).
+# 0 이 아닌 값이면 플래그 추가 → SSE long-lived 연결 포함 계산.
+CMD ["sh", "-c", "\
+  EXTRA=''; \
+  if [ \"${UVICORN_LIMIT_CONCURRENCY}\" != '0' ]; then \
+    EXTRA=\"--limit-concurrency ${UVICORN_LIMIT_CONCURRENCY}\"; \
+  fi; \
+  exec uvicorn app.main:app \
+    --host ${UVICORN_HOST} \
+    --port ${UVICORN_PORT} \
+    --workers ${UVICORN_WORKERS} \
+    --proxy-headers \
+    --forwarded-allow-ips='*' \
+    $EXTRA \
+"]
 
 # ─── healthcheck (compose 환경 — k8s 는 probe 따로) ─────────────────────
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \

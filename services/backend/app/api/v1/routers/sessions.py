@@ -5,10 +5,11 @@
   - tenant ownership 검증은 공용 assert_tenant_ownership 사용
   - 세션 ID는 ``sess_`` 프리픽스 + UUID4, 재현 가능한 로그용 session_id_hash 발행
 """
+
 from __future__ import annotations
 
-from typing import Annotated, Any
 import uuid
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
@@ -21,6 +22,7 @@ router = APIRouter()
 
 
 # ── Request Models ───────────────────────────────────────────────────────────
+
 
 class CreateSessionRequest(BaseModel):
     """세션 생성 페이로드. dict 직접 접근 제거 — 필드/길이/형식을 강제한다."""
@@ -53,6 +55,7 @@ class SessionResponse(BaseModel):
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
+
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=SessionResponse)
 async def create_session(
@@ -87,7 +90,9 @@ async def get_session(
 @router.get("/")
 async def list_sessions(
     tenant: Annotated[TenantContext, Depends(get_current_tenant)],
-    status_filter: str | None = Query(default=None, alias="status", max_length=32, pattern=r"^[A-Z_]*$"),
+    status_filter: str | None = Query(
+        default=None, alias="status", max_length=32, pattern=r"^[A-Z_]*$"
+    ),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     repo: SessionRepository = Depends(SessionRepository),
@@ -105,3 +110,60 @@ async def end_session(
     session = await repo.get_by_id(session_id)
     assert_tenant_ownership(session, tenant, resource_type="session", resource_id=session_id)
     await repo.end_session(session_id)
+
+
+# ── Phase N (N1.8) — Turn-level 리플레이 API ────────────────────────────────
+#
+# 운영포탈 상담이력 페이지: session turn 타임라인 표시용.
+# RBAC: portal:viewer+ (require_portal_role — portal issuer 토큰만 허용).
+# tenant ownership 검증 필수 (IDOR 방지 — assert_tenant_ownership).
+
+
+@router.get("/{session_id}/turns")
+async def get_session_turns(
+    session_id: str,
+    tenant: Annotated[TenantContext, Depends(get_current_tenant)],
+    repo: SessionRepository = Depends(SessionRepository),
+    limit: int = Query(default=50, ge=1, le=200, description="최대 반환 turn 수"),
+    offset: int = Query(default=0, ge=0, description="페이지 오프셋"),
+) -> dict:
+    """Session turn-by-turn 리플레이 (text 레벨).
+
+    audio replay 는 비스코프 (plan §1.3) — turn 텍스트/메타만 반환.
+    portal:viewer+ 이면 조회 가능하지만, tenant ownership 강제 (portal:admin 도 동일 테넌트).
+    """
+    # tenant ownership 검증
+    session = await repo.get_by_id(session_id)
+    assert_tenant_ownership(session, tenant, resource_type="session", resource_id=session_id)
+
+    # get_recent_history 는 최신순 limit 개 반환 — offset 지원을 위해 확장 필요.
+    # 현재 MVP: offset=0 이면 get_recent_history, offset>0 이면 raw aggregate.
+    if offset == 0:
+        turns = await repo.get_recent_history(session_id, limit=limit)
+    else:
+        turns = await _get_turns_with_offset(repo, session_id, limit=limit, offset=offset)
+
+    return {
+        "session_id": session_id,
+        "turns": turns,
+        "count": len(turns),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+async def _get_turns_with_offset(
+    repo: SessionRepository,
+    session_id: str,
+    limit: int,
+    offset: int,
+) -> list[dict]:
+    """offset 지원 turn 조회 (history_col aggregate)."""
+    pipeline: list[dict[str, Any]] = [
+        {"$match": {"session_id": session_id}},
+        {"$sort": {"timestamp": 1}},
+        {"$skip": offset},
+        {"$limit": limit},
+        {"$project": {"_id": 0}},
+    ]
+    return await repo.history_col.aggregate(pipeline).to_list(limit)

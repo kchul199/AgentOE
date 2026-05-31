@@ -26,6 +26,7 @@ Key 스킴:
       "created_at": float,
     }
 """
+
 from __future__ import annotations
 
 import base64
@@ -53,15 +54,17 @@ _SCHEMA_STATUS_DONE = "done"
 
 # 응답 replay 시 제외하는 헤더 — 매 요청마다 새로 붙어야 정상.
 # (Content-Length 는 응답 바디에서 재계산)
-_REPLAY_EXCLUDED_HEADERS = frozenset({
-    "content-length",
-    "date",
-    "server",
-    "x-request-id",
-    "x-trace-id",
-    "connection",
-    "transfer-encoding",
-})
+_REPLAY_EXCLUDED_HEADERS = frozenset(
+    {
+        "content-length",
+        "date",
+        "server",
+        "x-request-id",
+        "x-trace-id",
+        "connection",
+        "transfer-encoding",
+    }
+)
 
 
 # ── 데이터 클래스 ─────────────────────────────────────────────────────────────
@@ -81,10 +84,10 @@ class CachedResponse:
 class AcquireResult:
     """SETNX 시도 결과."""
 
-    acquired: bool                     # 새로 slot 을 잡았는지
-    existing_status: str | None        # 기존 레코드 상태 (in_progress|done|None)
-    existing_body_hash: str | None     # 기존 레코드의 요청 바디 해시
-    cached: CachedResponse | None      # existing_status == done 일 때만
+    acquired: bool  # 새로 slot 을 잡았는지
+    existing_status: str | None  # 기존 레코드 상태 (in_progress|done|None)
+    existing_body_hash: str | None  # 기존 레코드의 요청 바디 해시
+    cached: CachedResponse | None  # existing_status == done 일 때만
 
 
 # ── 키 빌더 / 바디 해시 ───────────────────────────────────────────────────────
@@ -121,12 +124,14 @@ def compute_body_hash(body: bytes) -> str:
 
 
 def _serialize_in_progress(body_hash: str) -> str:
-    return json.dumps({
-        "v": _RECORD_VERSION,
-        "status": _SCHEMA_STATUS_IN_PROGRESS,
-        "body_hash": body_hash,
-        "created_at": time.time(),
-    })
+    return json.dumps(
+        {
+            "v": _RECORD_VERSION,
+            "status": _SCHEMA_STATUS_IN_PROGRESS,
+            "body_hash": body_hash,
+            "created_at": time.time(),
+        }
+    )
 
 
 def _serialize_done(
@@ -139,24 +144,22 @@ def _serialize_done(
     limit = settings.IDEMPOTENCY_MAX_BODY_BYTES
     truncated = len(body) > limit
     payload_body = b"" if truncated else body
-    return json.dumps({
-        "v": _RECORD_VERSION,
-        "status": _SCHEMA_STATUS_DONE,
-        "body_hash": body_hash,
-        "response_status": int(status_code),
-        "response_headers": _filter_replay_headers(headers),
-        "response_body_b64": base64.b64encode(payload_body).decode("ascii"),
-        "response_truncated": truncated,
-        "created_at": time.time(),
-    })
+    return json.dumps(
+        {
+            "v": _RECORD_VERSION,
+            "status": _SCHEMA_STATUS_DONE,
+            "body_hash": body_hash,
+            "response_status": int(status_code),
+            "response_headers": _filter_replay_headers(headers),
+            "response_body_b64": base64.b64encode(payload_body).decode("ascii"),
+            "response_truncated": truncated,
+            "created_at": time.time(),
+        }
+    )
 
 
 def _filter_replay_headers(h: dict[str, str]) -> dict[str, str]:
-    return {
-        k: v
-        for k, v in h.items()
-        if k.lower() not in _REPLAY_EXCLUDED_HEADERS
-    }
+    return {k: v for k, v in h.items() if k.lower() not in _REPLAY_EXCLUDED_HEADERS}
 
 
 def _deserialize(raw: str) -> dict[str, Any] | None:
@@ -177,7 +180,7 @@ def _record_to_cached(obj: dict[str, Any]) -> CachedResponse | None:
     body_b64 = obj.get("response_body_b64", "")
     try:
         body = base64.b64decode(body_b64)
-    except Exception:  # noqa: BLE001
+    except Exception:
         body = b""
     headers = obj.get("response_headers", {}) or {}
     return CachedResponse(

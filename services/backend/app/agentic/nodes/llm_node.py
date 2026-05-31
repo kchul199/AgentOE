@@ -8,11 +8,13 @@ Fallback:
     * Primary LLM 실패 → fallback_model 자동 사용 (LLMService 내장)
     * Circuit Breaker OPEN → fallback_triggered=True, assistant_output=<polite wait message>
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import structlog
 
@@ -124,7 +126,9 @@ def make_llm_node(
             logging.warning("llm_node: CB OPEN — returning polite wait")
             return {
                 "assistant_output": _POLITE_WAIT,
-                "messages": [Message(role="assistant", content=_POLITE_WAIT, node_id="llm-cb-open")],
+                "messages": [
+                    Message(role="assistant", content=_POLITE_WAIT, node_id="llm-cb-open")
+                ],
                 "fallback_triggered": True,
                 "errors": [{"node": "llm", "reason": "CircuitBreakerOpen"}],
             }
@@ -135,7 +139,9 @@ def make_llm_node(
                 raise
             log.warning(
                 "llm_node.quota_exceeded_graceful",
-                scope=qe.scope, tenant_id=tenant_id, session_id=session_id,
+                scope=qe.scope,
+                tenant_id=tenant_id,
+                session_id=session_id,
             )
             return {
                 "assistant_output": _QUOTA_WAIT,

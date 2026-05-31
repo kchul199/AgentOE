@@ -110,6 +110,13 @@ config:
   AGENTIC_TENANTS: ""
   AGENTIC_CANARY_PERCENT: "10"      # 프로덕션은 10% 카나리부터
 
+  # ── Phase N — 운영포탈 (N1.12) ─────────────────────────────────────────
+  # Portal CORS: 운영포탈 도메인.  Secret 은 externalSecrets 에서 주입.
+  PORTAL_ORIGIN: "https://portal.agentoe.io"
+  # SSE 포드 당 동시 연결 상한 (N1.12 연결 가드 2차 방어).
+  # uvicorn --limit-concurrency 500 (=workers×125) 이 1차.
+  SSE_MAX_CONNECTIONS_PER_POD: "200"
+
 externalSecrets:
   enabled: true
   secretsPrefix: "agentoe/prod"
@@ -126,6 +133,10 @@ container:
   workers: 4               # prod 는 더 많은 worker
   grpcEnabled: true
   grpcPort: 50051
+  # N1.12 — uvicorn --limit-concurrency (SSE long-lived 연결 포함 계산).
+  # workers=4, 포드당 최대 500 연결. 4×125 = 500. SSE_MAX_CONNECTIONS_PER_POD=200 이 2차 방어.
+  # 0 → 무제한 (비활성). Dockerfile CMD 에서 조건부로 플래그 추가.
+  limitConcurrency: "500"
 
 # prod 는 NetworkPolicy 활성. vbgw 는 namespace `vbgw` 사용 가정.
 networkPolicy:

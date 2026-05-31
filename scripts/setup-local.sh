@@ -26,12 +26,12 @@ info "Docker: $DOCKER_VERSION ✓"
 # ── .env 설정 ────────────────────────────────────────────────────────────
 header ".env 파일 설정"
 
-if [ ! -f backend/.env ]; then
-    cp backend/.env.example backend/.env
-    warn ".env 파일을 backend/.env.example 에서 복사했습니다."
-    warn "backend/.env 를 열어 GROQ_API_KEY, JWT_SECRET 등을 설정하세요."
+if [ ! -f services/backend/.env ]; then
+    cp services/backend/.env.example services/backend/.env
+    warn ".env 파일을 services/backend/.env.example 에서 복사했습니다."
+    warn "services/backend/.env 를 열어 GROQ_API_KEY, JWT_SECRET 등을 설정하세요."
 else
-    info "backend/.env 이미 존재 ✓"
+    info "services/backend/.env 이미 존재 ✓"
 fi
 
 # ── credentials 디렉토리 ─────────────────────────────────────────────────
@@ -50,14 +50,14 @@ fi
 header "인프라 기동 (MongoDB RS + Redis)"
 
 info "이미지 풀링..."
-docker compose pull --quiet mongo-primary mongo-secondary redis nginx 2>/dev/null || true
+docker compose -f docker/compose.backend.yml pull --quiet mongo-primary mongo-secondary redis nginx 2>/dev/null || true
 
 info "MongoDB Primary + Redis 먼저 기동..."
-docker compose up -d mongo-primary redis
+docker compose -f docker/compose.backend.yml up -d mongo-primary redis
 
 info "MongoDB Primary 헬스체크 대기 (최대 60초)..."
 for i in $(seq 1 12); do
-    if docker compose exec -T mongo-primary mongosh --quiet --eval "db.adminCommand('ping').ok" >/dev/null 2>&1; then
+    if docker compose -f docker/compose.backend.yml exec -T mongo-primary mongosh --quiet --eval "db.adminCommand('ping').ok" >/dev/null 2>&1; then
         info "MongoDB Primary 준비됨 ✓"
         break
     fi
@@ -67,19 +67,19 @@ for i in $(seq 1 12); do
 done
 
 info "MongoDB Secondary 기동..."
-docker compose up -d mongo-secondary
+docker compose -f docker/compose.backend.yml up -d mongo-secondary
 
 info "Replica Set 초기화 (mongo-init)..."
-docker compose up mongo-init
+docker compose -f docker/compose.backend.yml up mongo-init
 
 # ── 백엔드 빌드 & 기동 ───────────────────────────────────────────────────
 header "백엔드 빌드 및 기동"
 
 info "FastAPI 이미지 빌드..."
-docker compose build api
+docker compose -f docker/compose.backend.yml build api
 
 info "전체 스택 기동..."
-docker compose up -d api nginx
+docker compose -f docker/compose.backend.yml up -d api nginx
 
 # ── 헬스체크 ────────────────────────────────────────────────────────────
 header "헬스체크"

@@ -13,12 +13,14 @@ Callbot Graph Runtime — compile / run / resume / cache
         # event = {"type": "delta"|"filler"|"tool_call"|"final", "data": ...}
         await ws.send_json(event)
 """
+
 from __future__ import annotations
 
 import logging
 from collections import OrderedDict
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any
 
 import structlog
 
@@ -35,6 +37,7 @@ log = structlog.get_logger(__name__)
 
 # ── 캐시 ──────────────────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class _CacheKey:
     tenant_id: str
@@ -47,7 +50,7 @@ class _LRUCache:
 
     def __init__(self, capacity: int = 256) -> None:
         self._cap = capacity
-        self._d: "OrderedDict[_CacheKey, CompiledScenario]" = OrderedDict()
+        self._d: OrderedDict[_CacheKey, CompiledScenario] = OrderedDict()
 
     def get(self, k: _CacheKey) -> CompiledScenario | None:
         if k not in self._d:
@@ -71,13 +74,14 @@ class _LRUCache:
 
 # ── 런타임 ────────────────────────────────────────────────────────────────────
 
+
 class CallbotGraphRuntime:
     """
     컴파일된 그래프를 테넌트/세션 경계로 실행.
     싱글톤으로 관리하고, FastAPI 시작시 services 주입.
     """
 
-    _instance: "CallbotGraphRuntime | None" = None
+    _instance: CallbotGraphRuntime | None = None
 
     def __init__(
         self,
@@ -92,12 +96,14 @@ class CallbotGraphRuntime:
         self._cache = _LRUCache(capacity=cache_size)
 
     @classmethod
-    def init(cls, services: ServiceBundle, scenario_loader: Any, checkpointer: Any | None = None) -> "CallbotGraphRuntime":
+    def init(
+        cls, services: ServiceBundle, scenario_loader: Any, checkpointer: Any | None = None
+    ) -> CallbotGraphRuntime:
         cls._instance = cls(services, scenario_loader, checkpointer)
         return cls._instance
 
     @classmethod
-    def instance(cls) -> "CallbotGraphRuntime":
+    def instance(cls) -> CallbotGraphRuntime:
         if cls._instance is None:
             raise RuntimeError("CallbotGraphRuntime not initialized — call .init() during startup")
         return cls._instance
@@ -112,9 +118,7 @@ class CallbotGraphRuntime:
             scenario_id=scenario_id,
             version=version,
         )
-        key = _CacheKey(
-            tenant_id=tenant_id, scenario_id=scenario_id, version=scenario.version
-        )
+        key = _CacheKey(tenant_id=tenant_id, scenario_id=scenario_id, version=scenario.version)
         hit = self._cache.get(key)
         if hit is not None:
             return hit
@@ -193,21 +197,31 @@ class CallbotGraphRuntime:
                     "messages": [{"role": "user", "content": user_input, "node_id": "input"}],
                 }
 
-            async for event in runnable.astream(input_payload, config=config, stream_mode="updates"):
+            async for event in runnable.astream(
+                input_payload, config=config, stream_mode="updates"
+            ):
                 # event = {"<node_id>": <partial_state_update>}
                 for node_id, update in event.items():
                     if not isinstance(update, dict):
                         continue
-                    if "assistant_output" in update and update["assistant_output"]:
+                    if update.get("assistant_output"):
                         # 스트리밍 청크는 llm_node 가 stream_sink 로 이미 푸시했음.
                         # 여기서는 "노드 완료" 이벤트만 방출.
                         yield {"type": "node_done", "node": node_id}
                     if update.get("fallback_triggered"):
                         yield {"type": "fallback", "node": node_id}
                     for tc in update.get("tool_calls", []) or []:
-                        yield {"type": "tool", "tool": tc.get("tool"), "status": "error" if tc.get("error") else "ok"}
+                        yield {
+                            "type": "tool",
+                            "tool": tc.get("tool"),
+                            "status": "error" if tc.get("error") else "ok",
+                        }
                     for err in update.get("errors", []) or []:
-                        yield {"type": "error_event", "node": err.get("node"), "reason": err.get("reason")}
+                        yield {
+                            "type": "error_event",
+                            "node": err.get("node"),
+                            "reason": err.get("reason"),
+                        }
 
             # 최종 state 회수
             final = runnable.get_state(config).values if True else {}
@@ -231,7 +245,7 @@ def _finalize_compile(compiled: CompiledScenario, checkpointer: Any | None) -> C
         kwargs["checkpointer"] = checkpointer
     if compiled.wait_node_ids:
         kwargs["interrupt_before"] = compiled.wait_node_ids
-    graph = builder.compile(**kwargs)
+    graph = builder.compile(**kwargs)  # type: ignore[union-attr]
     return CompiledScenario(
         scenario=compiled.scenario,
         graph=graph,

@@ -1,15 +1,16 @@
 /**
- * Scenario Builder 루트 — 툴바 + 팔레트 + React Flow 캔버스 + 속성/검증 사이드바.
+ * Scenario Builder 루트 — 툴바 + 팔레트 + React Flow 캔버스 + 탭 사이드바 + 상태바.
  *
- * Zustand 스토어 consumer 전용 — 모든 도메인 상태/액션은 `@/store/builderStore` 에 있다.
- * 이 컴포넌트는 프레젠테이션만 담당:
- *   - UI 이벤트를 스토어 액션에 배선
- *   - store selector 로부터 얻은 값을 렌더
- *   - 로컬 state 는 "목록 모달 열림", "token input focus" 처럼 컴포넌트 전용 UI state 에 한함
+ * 개선 (Dark-Pro 리디자인):
+ *   - 다크 툴바: 로고 · 프로젝트 메타 · 인증 · 액션 그룹 분리
+ *   - 사이드바 탭: 속성 / 검증 (오류 배지) / DSL 미리보기
+ *   - 하단 상태바: 노드 수 · 엣지 수 · 오류/정상 상태
+ *   - 모달: 블러 오버레이 + 슬라이드 애니메이션
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ReactFlow, {
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
   type OnSelectionChangeParams,
@@ -33,19 +34,16 @@ import {
 const NODE_TYPES = { scenarioNode: ScenarioNode };
 
 export default function App(): JSX.Element {
-  // ── 스토어 구독 (selector 단위) ─────────────────────────────────────
-  const edges = useBuilderStore((s) => s.edges);
-  const meta = useBuilderStore((s) => s.meta);
+  // ── 스토어 구독 ──────────────────────────────────────────────────────
+  const edges      = useBuilderStore((s) => s.edges);
+  const meta       = useBuilderStore((s) => s.meta);
   const selectedId = useBuilderStore((s) => s.selectedId);
-  const busy = useBuilderStore((s) => s.busy);
-  const error = useBuilderStore((s) => s.error);
-  const list = useBuilderStore((s) => s.list);
-  const token = useBuilderStore((s) => s.token);
+  const busy       = useBuilderStore((s) => s.busy);
+  const error      = useBuilderStore((s) => s.error);
+  const list       = useBuilderStore((s) => s.list);
+  const token      = useBuilderStore((s) => s.token);
+  const nodes      = useBuilderStore((s) => s.nodes);
 
-  // 복합 파생 값 — useBuilderStore(selector) 는 얕은 비교 사용 (Object.is).
-  // highlightedNodes / issues / assembled 는 nodes/edges/meta 가 바뀔 때마다 재계산되므로
-  // 각각 의존 필드만 구독 후 useMemo 로 계산한다.
-  const nodes = useBuilderStore((s) => s.nodes);
   const highlightedNodes = useMemo(
     () => selectHighlightedNodes({ ...useBuilderStore.getState(), nodes, meta }),
     [nodes, meta],
@@ -64,34 +62,41 @@ export default function App(): JSX.Element {
   );
 
   // ── 스토어 액션 ─────────────────────────────────────────────────────
-  const onNodesChange = useBuilderStore((s) => s.onNodesChange);
-  const onEdgesChange = useBuilderStore((s) => s.onEdgesChange);
-  const onConnect = useBuilderStore((s) => s.onConnect);
-  const setSelectedId = useBuilderStore((s) => s.setSelectedId);
-  const addNodeFromPalette = useBuilderStore((s) => s.addNodeFromPalette);
-  const updateSelectedNode = useBuilderStore((s) => s.updateSelectedNode);
-  const setEntryToSelected = useBuilderStore((s) => s.setEntryToSelected);
+  const onNodesChange          = useBuilderStore((s) => s.onNodesChange);
+  const onEdgesChange          = useBuilderStore((s) => s.onEdgesChange);
+  const onConnect              = useBuilderStore((s) => s.onConnect);
+  const setSelectedId          = useBuilderStore((s) => s.setSelectedId);
+  const addNodeFromPalette     = useBuilderStore((s) => s.addNodeFromPalette);
+  const updateSelectedNode     = useBuilderStore((s) => s.updateSelectedNode);
+  const setEntryToSelected     = useBuilderStore((s) => s.setEntryToSelected);
   const toggleFallbackToSelected = useBuilderStore((s) => s.toggleFallbackToSelected);
-  const setMeta = useBuilderStore((s) => s.setMeta);
-  const setToken = useBuilderStore((s) => s.setToken);
-  const clearError = useBuilderStore((s) => s.clearError);
-  const refreshList = useBuilderStore((s) => s.refreshList);
-  const loadScenario = useBuilderStore((s) => s.loadScenario);
-  const saveCurrent = useBuilderStore((s) => s.saveCurrent);
-  const publishCurrent = useBuilderStore((s) => s.publishCurrent);
+  const setMeta                = useBuilderStore((s) => s.setMeta);
+  const setToken               = useBuilderStore((s) => s.setToken);
+  const clearError             = useBuilderStore((s) => s.clearError);
+  const refreshList            = useBuilderStore((s) => s.refreshList);
+  const loadScenario           = useBuilderStore((s) => s.loadScenario);
+  const saveCurrent            = useBuilderStore((s) => s.saveCurrent);
+  const publishCurrent         = useBuilderStore((s) => s.publishCurrent);
 
-  // ── 로컬 UI state (목록 모달 열림) ─────────────────────────────────
-  const [showList, setShowList] = useState(false);
+  // ── 로컬 UI 상태 ────────────────────────────────────────────────────
+  const [showList, setShowList]   = useState(false);
+  const [activeTab, setActiveTab] = useState<"props" | "validation" | "dsl">("props");
+
+  // ── 파생 수치 ────────────────────────────────────────────────────────
+  const errorCount = issues.filter((i) => i.severity === "error").length;
+  const warnCount  = issues.filter((i) => i.severity === "warning").length;
+  const hasError   = errorCount > 0;
+  const authed     = token.trim().length > 0;
+
+  // 오류 발생 시 자동으로 검증 탭 강조 (탭 자동 전환은 하지 않음 — UX 혼란 방지)
 
   // ── React Flow 이벤트 ────────────────────────────────────────────────
   const onSelectionChange = useCallback(
-    (p: OnSelectionChangeParams) => {
-      setSelectedId(p.nodes[0]?.id ?? null);
-    },
+    (p: OnSelectionChangeParams) => setSelectedId(p.nodes[0]?.id ?? null),
     [setSelectedId],
   );
 
-  // ── Drag & Drop (palette → canvas) ───────────────────────────────────
+  // ── Drag & Drop ──────────────────────────────────────────────────────
   const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -113,84 +118,103 @@ export default function App(): JSX.Element {
     [addNodeFromPalette],
   );
 
-  // ── 최초 마운트: 시나리오 목록 로드 (실패는 조용히 무시) ──────────
+  // ── 최초 마운트: 시나리오 목록 로드 ─────────────────────────────────
   useEffect(() => {
     void refreshList();
-    // refreshList 는 스토어 참조로 안정적이지만 의존성 lint 를 위해 제외
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hasError = issues.some((i) => i.severity === "error");
-  const authed = token.trim().length > 0;
-
   return (
     <div className="app">
+      {/* ── Toolbar ───────────────────────────────────────────────── */}
       <header className="toolbar">
-        <h1>AgentOE Scenario Builder</h1>
-        <span className="meta">tenant</span>
-        <input
-          type="text"
-          value={meta.tenant_id}
-          style={{ width: 100 }}
-          onChange={(e) => setMeta({ tenant_id: e.target.value })}
-        />
-        <span className="meta">scenario_id</span>
-        <input
-          type="text"
-          value={meta.scenario_id}
-          onChange={(e) => setMeta({ scenario_id: e.target.value })}
-        />
-        <span className="meta">name</span>
-        <input
-          type="text"
-          value={meta.name}
-          onChange={(e) => setMeta({ name: e.target.value })}
-        />
-        <span className="grow" />
-        <button
-          type="button"
-          onClick={() => {
-            void refreshList();
-            setShowList(true);
-          }}
-          disabled={busy}
-        >
-          불러오기…
-        </button>
-        <span
-          className="meta"
-          title={authed ? "JWT 설정됨" : "X-Tenant-Id 헤더 모드 (dev)"}
-          style={{
-            color: authed ? "#059669" : "#b45309",
-            fontSize: 11,
-            fontWeight: 600,
-          }}
-        >
-          {authed ? "🔒 JWT" : "⚠ dev"}
-        </span>
-        <input
-          type="password"
-          placeholder="JWT (선택)"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          style={{ width: 160 }}
-          autoComplete="off"
-        />
-        <button type="button" onClick={() => void saveCurrent()} disabled={busy || !assembled.scenario}>
-          {busy ? "저장 중…" : "Save"}
-        </button>
-        <button
-          type="button"
-          className="primary"
-          onClick={() => void publishCurrent()}
-          disabled={busy || !assembled.scenario || hasError}
-        >
-          {busy ? "…" : "Publish"}
-        </button>
+        {/* 로고 */}
+        <div className="toolbar-brand">
+          <div className="toolbar-logo">⚡</div>
+          <span className="toolbar-title">AgentOE</span>
+        </div>
+
+        <div className="toolbar-divider" />
+
+        {/* 프로젝트 메타 */}
+        <div className="toolbar-meta">
+          <div className="toolbar-meta-field">
+            <span className="toolbar-meta-label">tenant</span>
+            <input
+              type="text"
+              value={meta.tenant_id}
+              style={{ width: 88 }}
+              onChange={(e) => setMeta({ tenant_id: e.target.value })}
+            />
+          </div>
+          <span className="toolbar-meta-sep">/</span>
+          <div className="toolbar-meta-field">
+            <span className="toolbar-meta-label">scenario_id</span>
+            <input
+              type="text"
+              value={meta.scenario_id}
+              style={{ width: 138 }}
+              onChange={(e) => setMeta({ scenario_id: e.target.value })}
+            />
+          </div>
+          <span className="toolbar-meta-sep">/</span>
+          <div className="toolbar-meta-field">
+            <span className="toolbar-meta-label">name</span>
+            <input
+              type="text"
+              value={meta.name}
+              style={{ width: 138 }}
+              onChange={(e) => setMeta({ name: e.target.value })}
+            />
+          </div>
+        </div>
+
+        <div className="grow" />
+
+        {/* 인증 + 액션 */}
+        <div className="toolbar-right">
+          <span className={`auth-badge ${authed ? "authed" : "dev"}`}>
+            {authed ? "🔒 JWT" : "⚠ dev"}
+          </span>
+          <input
+            className="token-input"
+            type="password"
+            placeholder="JWT token (선택)"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            autoComplete="off"
+          />
+          <button
+            className="btn"
+            type="button"
+            onClick={() => { void refreshList(); setShowList(true); }}
+            disabled={busy}
+          >
+            불러오기
+          </button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => void saveCurrent()}
+            disabled={busy || !assembled.scenario}
+          >
+            {busy ? "저장 중…" : "저장"}
+          </button>
+          <button
+            className="btn btn-primary"
+            type="button"
+            onClick={() => void publishCurrent()}
+            disabled={busy || !assembled.scenario || hasError}
+          >
+            {busy ? "…" : "▲ Publish"}
+          </button>
+        </div>
       </header>
 
+      {/* ── Palette ───────────────────────────────────────────────── */}
       <Palette />
 
+      {/* ── Canvas ────────────────────────────────────────────────── */}
       <main className="canvas" onDrop={onDrop} onDragOver={onDragOver}>
         <ReactFlow
           nodes={highlightedNodes}
@@ -202,110 +226,167 @@ export default function App(): JSX.Element {
           nodeTypes={NODE_TYPES}
           fitView
         >
-          <Background />
+          <Background
+            variant={BackgroundVariant.Dots}
+            color="#c8d4e0"
+            gap={18}
+            size={1}
+          />
           <Controls />
-          <MiniMap />
+          <MiniMap
+            style={{ background: "#1e2a3f" }}
+            maskColor="rgba(15,22,35,0.4)"
+          />
         </ReactFlow>
       </main>
 
+      {/* ── Sidebar ───────────────────────────────────────────────── */}
       <aside className="sidebar">
-        {error ? (
-          <div className="section">
+        {/* 탭 바 */}
+        <div className="sidebar-tabs">
+          <button
+            className={`sidebar-tab ${activeTab === "props" ? "active" : ""}`}
+            onClick={() => setActiveTab("props")}
+          >
+            속성
+          </button>
+          <button
+            className={`sidebar-tab ${activeTab === "validation" ? "active" : ""}`}
+            onClick={() => setActiveTab("validation")}
+          >
+            검증
+            {errorCount > 0 && (
+              <span className="tab-badge error">{errorCount}</span>
+            )}
+            {errorCount === 0 && warnCount > 0 && (
+              <span className="tab-badge warn">{warnCount}</span>
+            )}
+          </button>
+          <button
+            className={`sidebar-tab ${activeTab === "dsl" ? "active" : ""}`}
+            onClick={() => setActiveTab("dsl")}
+          >
+            DSL
+          </button>
+        </div>
+
+        {/* 탭 콘텐츠 */}
+        <div className="sidebar-content">
+          {/* 오류 배너 (어느 탭에서든 표시) */}
+          {error ? (
             <div
-              className="issue error"
-              style={{ padding: 8, borderRadius: 4, cursor: "pointer" }}
+              className="error-banner"
               onClick={clearError}
               title="클릭해서 닫기"
             >
-              {error}
+              <span>✕</span>
+              <span>{error}</span>
             </div>
-          </div>
-        ) : null}
-        <PropertyPanel
-          node={selectedDsl}
-          onChange={updateSelectedNode}
-          isEntry={!!selectedId && meta.entry === selectedId}
-          isFallback={!!selectedId && meta.fallback_node === selectedId}
-          onSetEntry={setEntryToSelected}
-          onSetFallback={toggleFallbackToSelected}
-        />
-        <ValidationPanel issues={issues} />
-        <div className="section">
-          <h2>DSL 미리보기</h2>
-          <pre>
-            {assembled.scenario
-              ? JSON.stringify(assembled.scenario, null, 2)
-              : `// invalid: ${assembled.error ?? ""}`}
-          </pre>
+          ) : null}
+
+          {activeTab === "props" && (
+            <PropertyPanel
+              node={selectedDsl}
+              onChange={updateSelectedNode}
+              isEntry={!!selectedId && meta.entry === selectedId}
+              isFallback={!!selectedId && meta.fallback_node === selectedId}
+              onSetEntry={setEntryToSelected}
+              onSetFallback={toggleFallbackToSelected}
+            />
+          )}
+
+          {activeTab === "validation" && <ValidationPanel issues={issues} />}
+
+          {activeTab === "dsl" && (
+            <div className="dsl-wrap">
+              <pre className="dsl-pre">
+                {assembled.scenario
+                  ? JSON.stringify(assembled.scenario, null, 2)
+                  : `// invalid\n// ${assembled.error ?? ""}`}
+              </pre>
+            </div>
+          )}
         </div>
       </aside>
 
+      {/* ── Status Bar ────────────────────────────────────────────── */}
+      <div className="statusbar">
+        <div className="sb-item">
+          <span className="sb-dot" style={{ background: "#6366f1" }} />
+          {nodes.length} nodes
+        </div>
+        <div className="sb-sep" />
+        <div className="sb-item">{edges.length} edges</div>
+        <div className="sb-sep" />
+        {hasError ? (
+          <div className="sb-item sb-error">
+            ✕ {errorCount} error{errorCount > 1 ? "s" : ""}
+          </div>
+        ) : (
+          <div className="sb-item sb-ok">✓ valid</div>
+        )}
+        {warnCount > 0 && !hasError && (
+          <>
+            <div className="sb-sep" />
+            <div className="sb-item sb-warn">⚠ {warnCount} warning{warnCount > 1 ? "s" : ""}</div>
+          </>
+        )}
+        <div className="sb-grow" />
+        {meta.scenario_id && (
+          <div className="sb-item sb-id">
+            {meta.tenant_id} / {meta.scenario_id}
+            {meta.name && meta.name !== meta.scenario_id ? ` — ${meta.name}` : ""}
+          </div>
+        )}
+      </div>
+
+      {/* ── Toast ─────────────────────────────────────────────────── */}
       <ToastStack />
 
+      {/* ── Load Modal ────────────────────────────────────────────── */}
       {showList ? (
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,23,42,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 50,
-          }}
+          className="modal-overlay"
           onClick={() => setShowList(false)}
         >
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 8,
-              padding: 20,
-              minWidth: 420,
-              maxHeight: "70vh",
-              overflow: "auto",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 style={{ margin: "0 0 12px" }}>시나리오 불러오기</h2>
-            {list.length === 0 ? (
-              <p style={{ color: "#64748b", margin: 0 }}>
-                저장된 시나리오가 없습니다.
-              </p>
-            ) : (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {list.map((s) => (
-                  <li key={s.scenario_id} style={{ padding: "6px 0" }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>시나리오 불러오기</h2>
+              <button
+                className="modal-close"
+                type="button"
+                onClick={() => setShowList(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              {list.length === 0 ? (
+                <div className="modal-empty">저장된 시나리오가 없습니다.</div>
+              ) : (
+                <div className="scenario-list">
+                  {list.map((s) => (
                     <button
+                      key={s.scenario_id}
+                      className="scenario-list-item"
                       type="button"
-                      style={{
-                        width: "100%",
-                        textAlign: "left",
-                        padding: "8px 10px",
-                        border: "1px solid #e2e8f0",
-                        borderRadius: 6,
-                        background: "#f8fafc",
-                        cursor: "pointer",
-                      }}
                       onClick={async () => {
                         await loadScenario(s.scenario_id, "latest");
                         setShowList(false);
                       }}
                     >
-                      <strong>{s.name}</strong>{" "}
-                      <span style={{ color: "#64748b", fontSize: 12 }}>
-                        v{s.version}
-                        {s.published ? " · published" : ""}
-                      </span>
+                      <div className="sli-name">{s.name}</div>
+                      <div className="sli-meta">
+                        <span>{s.scenario_id}</span>
+                        <span>v{s.version}</span>
+                        {s.published ? (
+                          <span className="sli-published">published</span>
+                        ) : null}
+                      </div>
                     </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div style={{ textAlign: "right", marginTop: 16 }}>
-              <button type="button" onClick={() => setShowList(false)}>
-                닫기
-              </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

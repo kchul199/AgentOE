@@ -1,9 +1,11 @@
 """Custom exception classes for AgentOE."""
+
 from typing import Any
 
 
 class AgentOEBaseError(Exception):
     """Base exception for all AgentOE errors."""
+
     http_status: int = 400
     code: str = "AGENTOE_ERROR"
 

@@ -19,11 +19,14 @@
         await send_shutdown_notice(session_id)
         break
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import signal
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import structlog
 
@@ -82,7 +85,7 @@ class ShutdownManager:
         # 1) 활성 세션 목록 확인
         try:
             active = await self._session_enumerator()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("shutdown_enumerate_failed", error=str(e))
             return
 
@@ -105,24 +108,26 @@ class ShutdownManager:
         while loop.time() - start < timeout:
             try:
                 remaining = await self._session_enumerator()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 remaining = []
             if not remaining:
-                logger.info("shutdown_drain_completed_naturally", elapsed_s=round(loop.time() - start, 2))
+                logger.info(
+                    "shutdown_drain_completed_naturally", elapsed_s=round(loop.time() - start, 2)
+                )
                 return
             await asyncio.sleep(1.0)
 
         # 4) 잔여 세션 강제 종료
         try:
             remaining = await self._session_enumerator()
-        except Exception:  # noqa: BLE001
+        except Exception:
             remaining = []
         if remaining and self._session_terminator:
             logger.warning("shutdown_force_terminate", count=len(remaining))
             for sid in remaining:
                 try:
                     await self._session_terminator(sid)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.error("shutdown_terminate_failed", session_id=sid, error=str(e))
 
     async def _safe_notice(self, session_id: str) -> None:
@@ -130,7 +135,7 @@ class ShutdownManager:
             return
         try:
             await asyncio.wait_for(self._notice_sender(session_id), timeout=3.0)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("shutdown_notice_failed", session_id=session_id, error=str(e))
 
 
@@ -141,8 +146,6 @@ def register_signal_handlers() -> None:
     """uvicorn/K8s SIGTERM → drain flag on. 실제 drain은 lifespan shutdown에서."""
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
+        # Windows / 이벤트 루프 상태에 따라 실패 가능 — uvicorn 기본 핸들러에 의존
+        with contextlib.suppress(NotImplementedError, RuntimeError):
             loop.add_signal_handler(sig, shutdown_manager.mark_draining)
-        except (NotImplementedError, RuntimeError):
-            # Windows / 이벤트 루프 상태에 따라 실패 가능 — uvicorn 기본 핸들러에 의존
-            pass

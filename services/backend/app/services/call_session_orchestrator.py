@@ -17,11 +17,11 @@ OutboundEvent 흐름:
 세션 종료 경로는 end_session() 하나로 통일. should_close 플래그로
 호출자에게 루프 종료를 알린다.
 """
+
 from __future__ import annotations
 
 import base64
 import json
-import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -29,7 +29,6 @@ from typing import Any
 import structlog
 
 from app.core.logging import bind_pipeline_context, unbind_keys
-from app.core.metrics import record_pipeline_call
 from app.domain.circuit_breaker import CircuitBreakerOpenError
 from app.domain.policy_gate import PolicyLevel
 from app.domain.session_fsm import SessionEventType, SessionFSM, SessionState
@@ -72,6 +71,7 @@ def _transfer_priority(reason: TransferReason) -> int:
 
 # ── OutboundEvent ─────────────────────────────────────────────────────────────
 
+
 @dataclass
 class OutboundEvent:
     """
@@ -79,6 +79,7 @@ class OutboundEvent:
 
     호출자는 to_json()으로 직렬화해서 WebSocket으로 전송한다.
     """
+
     name: str
     payload: dict[str, Any] = field(default_factory=dict)
 
@@ -87,6 +88,7 @@ class OutboundEvent:
 
 
 # ── CallSessionOrchestrator ───────────────────────────────────────────────────
+
 
 class CallSessionOrchestrator:
     """
@@ -212,10 +214,8 @@ class CallSessionOrchestrator:
                 context_hint=msg.get("context", ""),
             )
 
-        logger.warning("Unknown control action: %s", action,
-                       session_id=self.session_id)
-        return [self._evt("error", code="UNKNOWN_ACTION",
-                          message=f"Unknown action: {action}")]
+        logger.warning("Unknown control action: %s", action, session_id=self.session_id)
+        return [self._evt("error", code="UNKNOWN_ACTION", message=f"Unknown action: {action}")]
 
     async def end_session(self, reason: str = "normal") -> list[OutboundEvent]:
         """
@@ -230,16 +230,12 @@ class CallSessionOrchestrator:
         e = self._do_transition(SessionState.ENDED)
 
         try:
-            await self._repo.end_session(
-                self.session_id, reason=reason, fsm=self.fsm
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to persist session end: %s", exc,
-                           session_id=self.session_id)
+            await self._repo.end_session(self.session_id, reason=reason, fsm=self.fsm)
+        except Exception as exc:
+            logger.warning("Failed to persist session end: %s", exc, session_id=self.session_id)
 
         logger.info("Session ended", session_id=self.session_id, reason=reason)
-        return [e] if e else [self._evt("state_change",
-                                        state=SessionState.ENDED.value)]
+        return [e] if e else [self._evt("state_change", state=SessionState.ENDED.value)]
 
     # ── 내부 파이프라인 실행 ──────────────────────────────────────────────────
 
@@ -261,8 +257,13 @@ class CallSessionOrchestrator:
 
         # 이관 진행 중이면 파이프라인 차단
         if self.fsm.is_transfer_in_progress:
-            events.append(self._evt("error", code="TRANSFER_IN_PROGRESS",
-                                    message="상담사 이관 중입니다. 잠시만 기다려 주세요."))
+            events.append(
+                self._evt(
+                    "error",
+                    code="TRANSFER_IN_PROGRESS",
+                    message="상담사 이관 중입니다. 잠시만 기다려 주세요.",
+                )
+            )
             return events
 
         # ── 파이프라인 실행 ────────────────────────────────────────────────
@@ -283,24 +284,33 @@ class CallSessionOrchestrator:
 
         except CircuitBreakerOpenError as exc:
             self._pipeline_failure_count += 1
-            logger.error("Circuit breaker open: %s (failures=%d)",
-                         exc, self._pipeline_failure_count,
-                         session_id=self.session_id)
-            events.append(self._evt("error", code="SERVICE_UNAVAILABLE",
-                                    message=f"AI 서비스 일시 장애: {exc.service_name}"))
+            logger.error(
+                "Circuit breaker open: %s (failures=%d)",
+                exc,
+                self._pipeline_failure_count,
+                session_id=self.session_id,
+            )
+            events.append(
+                self._evt(
+                    "error",
+                    code="SERVICE_UNAVAILABLE",
+                    message=f"AI 서비스 일시 장애: {exc.service_name}",
+                )
+            )
             events.extend(await self._check_auto_transfer())
             e = self._do_transition(SessionState.LISTENING)
             if e:
                 events.append(e)
             return events
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._pipeline_failure_count += 1
-            logger.exception("Pipeline unexpected error (failures=%d)",
-                             self._pipeline_failure_count,
-                             session_id=self.session_id)
-            events.append(self._evt("error", code="PIPELINE_ERROR",
-                                    message=str(exc)))
+            logger.exception(
+                "Pipeline unexpected error (failures=%d)",
+                self._pipeline_failure_count,
+                session_id=self.session_id,
+            )
+            events.append(self._evt("error", code="PIPELINE_ERROR", message=str(exc)))
             events.extend(await self._check_auto_transfer())
             e = self._do_transition(SessionState.LISTENING)
             if e:
@@ -317,51 +327,64 @@ class CallSessionOrchestrator:
 
         # ── 이관 의도 감지 ────────────────────────────────────────────────
         if TransferService.detect_transfer_intent(result.stt_text):
-            logger.info("Transfer intent detected in STT",
-                        session_id=self.session_id)
-            events.extend(await self._trigger_transfer(
-                reason=TransferReason.CUSTOMER_REQUEST,
-                context_hint=result.stt_text,
-            ))
+            logger.info("Transfer intent detected in STT", session_id=self.session_id)
+            events.extend(
+                await self._trigger_transfer(
+                    reason=TransferReason.CUSTOMER_REQUEST,
+                    context_hint=result.stt_text,
+                )
+            )
             return events
 
         # ── 정책 차단 분기 ────────────────────────────────────────────────
         if not result.policy_allowed:
             policy_lvl = result.policy_level
             if policy_lvl in ("G4", "G5"):
-                reason = (TransferReason.G4_POLICY
-                          if policy_lvl == "G4" else TransferReason.G5_POLICY)
-                events.extend(await self._trigger_transfer(
-                    reason=reason, context_hint=result.stt_text,
-                ))
+                reason = (
+                    TransferReason.G4_POLICY if policy_lvl == "G4" else TransferReason.G5_POLICY
+                )
+                events.extend(
+                    await self._trigger_transfer(
+                        reason=reason,
+                        context_hint=result.stt_text,
+                    )
+                )
             else:
-                events.append(self._evt("error", code="POLICY_BLOCKED",
-                                        message=f"정책 차단 (level={policy_lvl})"))
+                events.append(
+                    self._evt(
+                        "error", code="POLICY_BLOCKED", message=f"정책 차단 (level={policy_lvl})"
+                    )
+                )
                 e = self._do_transition(SessionState.LISTENING)
                 if e:
                     events.append(e)
             return events
 
         # ── 정상 경로: LLM + TTS 결과 ────────────────────────────────────
-        events.append(self._evt("llm_chunk", text=result.llm_text,
-                                is_final=True, is_filler=result.filler_triggered))
+        events.append(
+            self._evt(
+                "llm_chunk", text=result.llm_text, is_final=True, is_filler=result.filler_triggered
+            )
+        )
 
         if result.tts_audio:
-            events.append(self._evt(
-                "tts_ready",
-                audio_b64=base64.b64encode(result.tts_audio).decode(),
-                text=result.llm_text,
-            ))
+            events.append(
+                self._evt(
+                    "tts_ready",
+                    audio_b64=base64.b64encode(result.tts_audio).decode(),
+                    text=result.llm_text,
+                )
+            )
 
         # ── 히스토리 관리 ─────────────────────────────────────────────────
-        self.history.append({"role": "user",      "content": result.stt_text})
-        self.history.append({"role": "assistant",  "content": result.llm_text})
+        self.history.append({"role": "user", "content": result.stt_text})
+        self.history.append({"role": "assistant", "content": result.llm_text})
         if len(self.history) > MAX_HISTORY_IN_MEMORY:
             self.history = self.history[-MAX_HISTORY_IN_MEMORY:]
 
-        events.append(self._evt("pipeline_done",
-                                latency=result.latency,
-                                policy_level=result.policy_level))
+        events.append(
+            self._evt("pipeline_done", latency=result.latency, policy_level=result.policy_level)
+        )
 
         # ── 영속성 저장 ───────────────────────────────────────────────────
         await self._persist_turn(
@@ -385,9 +408,7 @@ class CallSessionOrchestrator:
         context_hint: str = "",
     ) -> list[OutboundEvent]:
         """TransferService 호출 및 결과에 따른 이벤트 반환."""
-        context_summary = TransferService.build_context_summary(
-            self.history, context_hint
-        )
+        context_summary = TransferService.build_context_summary(self.history, context_hint)
         transfer_req = TransferRequest(
             session_id=self.session_id,
             tenant_id=self.tenant_id,
@@ -451,12 +472,12 @@ class CallSessionOrchestrator:
                 latency=latency,
                 policy_level=policy_level,
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to persist turn: %s", exc,
-                           session_id=self.session_id)
+        except Exception as exc:
+            logger.warning("Failed to persist turn: %s", exc, session_id=self.session_id)
 
 
 # ── 세션 복구 / 신규 생성 팩토리 ──────────────────────────────────────────────
+
 
 async def restore_or_create_orchestrator(
     session_id: str,
@@ -482,12 +503,14 @@ async def restore_or_create_orchestrator(
     # ── 신규 세션 ────────────────────────────────────────────────────────
     if hot_state is None:
         fsm = SessionFSM(SessionState.IDLE)
-        await repo.create({
-            "session_id": session_id,
-            "tenant_id":  tenant_id,
-            "client_id":  client_id,
-            "status":     SessionState.IDLE.value,
-        })
+        await repo.create(
+            {
+                "session_id": session_id,
+                "tenant_id": tenant_id,
+                "client_id": client_id,
+                "status": SessionState.IDLE.value,
+            }
+        )
         orchestrator = CallSessionOrchestrator(
             session_id=session_id,
             tenant_id=tenant_id,
@@ -496,8 +519,7 @@ async def restore_or_create_orchestrator(
             fsm=fsm,
             policy_level=policy_level,
         )
-        initial = [OutboundEvent("connected",
-                                 {"session_id": session_id, "reconnected": False})]
+        initial = [OutboundEvent("connected", {"session_id": session_id, "reconnected": False})]
         return orchestrator, initial
 
     # ── ENDED 세션: 연결 거부 ─────────────────────────────────────────────
@@ -512,9 +534,8 @@ async def restore_or_create_orchestrator(
         _SAFE_STATES = {SessionState.IDLE, SessionState.LISTENING, SessionState.ENDED}
         if fsm.state not in _SAFE_STATES and fsm.can_transition(SessionState.LISTENING):
             fsm.transition(SessionState.LISTENING)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("FSM snapshot restore failed, using IDLE: %s", exc,
-                       session_id=session_id)
+    except Exception as exc:
+        logger.warning("FSM snapshot restore failed, using IDLE: %s", exc, session_id=session_id)
         fsm = SessionFSM(SessionState.IDLE)
 
     history: list[dict] = hot_state.get("history", [])
@@ -530,14 +551,21 @@ async def restore_or_create_orchestrator(
         policy_level=policy_level,
     )
 
-    logger.info("Session reconnected",
-                session_id=session_id,
-                turns_restored=turns_restored,
-                state=fsm.state.value)
+    logger.info(
+        "Session reconnected",
+        session_id=session_id,
+        turns_restored=turns_restored,
+        state=fsm.state.value,
+    )
 
-    initial = [OutboundEvent("reconnected", {
-        "session_id":    session_id,
-        "turns_restored": turns_restored,
-        "state":          fsm.state.value,
-    })]
+    initial = [
+        OutboundEvent(
+            "reconnected",
+            {
+                "session_id": session_id,
+                "turns_restored": turns_restored,
+                "state": fsm.state.value,
+            },
+        )
+    ]
     return orchestrator, initial

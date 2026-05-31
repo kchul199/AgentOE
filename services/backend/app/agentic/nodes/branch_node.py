@@ -8,11 +8,13 @@ LangGraph 에서 조건부 엣지는 함수가 다음 노드 id 문자열을 반
   2) 엣지 디스패처(state -> next_node_id) 팩토리
 를 함께 제공한다.
 """
+
 from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from app.agentic.scenario_dsl import BranchNode, BranchNodeConfig, Edge
 from app.agentic.state import CallbotState
@@ -79,10 +81,10 @@ def _match(mode: str, value: Any, when: str) -> bool:
     if mode == "expr":
         # 'contains:<word>' 또는 'regex:<pattern>' 지원, 아니면 exact
         if when.startswith("contains:"):
-            return when[len("contains:"):].lower() in str(value).lower()
+            return when[len("contains:") :].lower() in str(value).lower()
         if when.startswith("regex:"):
             try:
-                return bool(re.search(when[len("regex:"):], str(value)))
+                return bool(re.search(when[len("regex:") :], str(value)))
             except re.error:
                 return False
         return str(value) == when

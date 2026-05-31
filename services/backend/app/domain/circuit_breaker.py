@@ -29,32 +29,34 @@ AI 외부 서비스(STT, LLM, TTS) 장애 감지 및 자동 복구
      `async with cb:` 패턴으로 불필요한 wrapper closure를 제거합니다.
      `call()` 메서드는 하위 호환성을 위해 유지하며 컨텍스트 매니저에 위임합니다.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Callable, TypeVar
+from enum import StrEnum
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
 
-class CircuitState(str, Enum):
-    CLOSED = "CLOSED"       # 정상 동작
-    OPEN = "OPEN"           # 장애 감지 — 즉시 거부
-    HALF_OPEN = "HALF_OPEN" # 복구 시도 중
+class CircuitState(StrEnum):
+    CLOSED = "CLOSED"  # 정상 동작
+    OPEN = "OPEN"  # 장애 감지 — 즉시 거부
+    HALF_OPEN = "HALF_OPEN"  # 복구 시도 중
 
 
 @dataclass
 class CircuitBreakerConfig:
-    failure_threshold: int = 5         # OPEN 전환 연속 실패 횟수
-    recovery_timeout: float = 30.0     # OPEN → HALF_OPEN 대기 시간(초)
-    half_open_max_calls: int = 3       # HALF_OPEN 상태 허용 동시 호출 수
-    success_threshold: int = 2         # HALF_OPEN → CLOSED 전환 연속 성공 횟수
+    failure_threshold: int = 5  # OPEN 전환 연속 실패 횟수
+    recovery_timeout: float = 30.0  # OPEN → HALF_OPEN 대기 시간(초)
+    half_open_max_calls: int = 3  # HALF_OPEN 상태 허용 동시 호출 수
+    success_threshold: int = 2  # HALF_OPEN → CLOSED 전환 연속 성공 횟수
     # 외부 서비스 건강과 무관한 예외 타입 — failure_count에서 제외됨
     # 예: RuntimeError("groq not installed"), ValueError (잘못된 입력 포맷)
     excluded_exceptions: tuple[type[Exception], ...] = field(default_factory=tuple)
@@ -73,6 +75,7 @@ class CircuitBreakerStats:
 
 class CircuitBreakerOpenError(Exception):
     """Circuit Breaker OPEN 상태에서 호출 시 발생"""
+
     def __init__(self, service_name: str):
         super().__init__(f"Circuit breaker OPEN for service '{service_name}'")
         self.service_name = service_name
@@ -109,7 +112,7 @@ class CircuitBreaker:
 
     # ── 컨텍스트 매니저 (권장) ───────────────────────────────────────────────
 
-    async def __aenter__(self) -> "CircuitBreaker":
+    async def __aenter__(self) -> CircuitBreaker:
         """Lock 획득 → 상태 체크 → total_calls 증가 → Lock 해제.
         Lock은 상태 체크 후 즉시 해제됩니다(설계 결정 #2 참조).
         """
@@ -130,9 +133,12 @@ class CircuitBreaker:
         """
         if exc_type is None:
             await self._on_success()
-        elif exc_val is not None and not isinstance(exc_val, CircuitBreakerOpenError):
-            if not self._is_excluded(exc_val):
-                await self._on_failure(exc_val)
+        elif (
+            exc_val is not None
+            and not isinstance(exc_val, CircuitBreakerOpenError)
+            and not self._is_excluded(exc_val)
+        ):
+            await self._on_failure(exc_val)
         return False  # 예외 억제 안 함 — 항상 호출자로 전파
 
     # ── call() — 하위 호환 메서드 ────────────────────────────────────────────

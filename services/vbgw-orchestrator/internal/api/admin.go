@@ -26,8 +26,6 @@ func NewAdminHandler(sessionMgr session.Store) *AdminHandler {
 // For purely local memory stores, it fetches local.
 // For Redis, it iterates the keyspace (this should be used sparingly by Dashboards, e.g. polling every 5s).
 func (h *AdminHandler) GetActiveSessions(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	
 	// Create an aggregation slice
 	var activeSessions []map[string]interface{}
 

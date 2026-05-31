@@ -1,9 +1,12 @@
 """Shared pytest fixtures."""
+
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock
-from app.main import app
+
 from app.core.auth import create_access_token
+from app.main import app
 
 
 @pytest.fixture

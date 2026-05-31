@@ -42,9 +42,11 @@ WebSocket Close Codes:
   {"event": "error",          "code": str, "message": str}
   {"event": "pong"}
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -63,7 +65,6 @@ from app.middleware.admission_middleware import (
 )
 from app.repositories.session_repository import SessionRepository
 from app.services.call_session_orchestrator import (
-    CallSessionOrchestrator,
     OutboundEvent,
     restore_or_create_orchestrator,
 )
@@ -74,15 +75,21 @@ router = APIRouter()
 # keepalive ping 주기 (수신 대기 타임아웃)
 PING_INTERVAL_SECONDS = 20
 
+# 파이프라인 실행 최소 오디오 크기 (160 bytes = 20ms @ 8kHz/16bit PCM)
+# 이보다 작은 청크는 VAD noise 로 간주해 파이프라인 호출 skip
+MIN_AUDIO_BYTES = 160
+
 
 # ── JWT 검증 ──────────────────────────────────────────────────────────────────
+
 
 def _decode_token(token: str) -> dict | None:
     """WebSocket query-param JWT 검증. 실패 시 None 반환."""
     try:
         from jose import jwt
+
         return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -106,6 +113,7 @@ def _is_origin_allowed(origin: str | None) -> bool:
 
 # ── 전송 헬퍼 ─────────────────────────────────────────────────────────────────
 
+
 async def _send_events_direct(ws: WebSocket, events: list[OutboundEvent]) -> None:
     """
     BoundedWSSender 가 아직 준비되지 않은 지점(accept 전/후 에러 경로)에서만 사용.
@@ -116,7 +124,7 @@ async def _send_events_direct(ws: WebSocket, events: list[OutboundEvent]) -> Non
     for evt in events:
         try:
             await ws.send_text(evt.to_json())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("WS send failed (event=%s): %s", evt.name, exc)
 
 
@@ -133,6 +141,7 @@ def _enqueue_events(sender: BoundedWSSender, events: list[OutboundEvent]) -> Non
 
 # ── WebSocket 엔드포인트 ──────────────────────────────────────────────────────
 
+
 @router.websocket("/ws/vbgw")
 async def vbgw_websocket(
     ws: WebSocket,
@@ -147,7 +156,8 @@ async def vbgw_websocket(
     if not _is_origin_allowed(origin):
         logger.warning(
             "WS origin rejected: origin=%s allowed=%s",
-            origin, settings.WS_ALLOWED_ORIGINS,
+            origin,
+            settings.WS_ALLOWED_ORIGINS,
         )
         await ws.close(code=4005, reason="Origin not allowed")
         return
@@ -171,7 +181,7 @@ async def vbgw_websocket(
         if await ks.is_active(KillSwitchScope.TENANT, tenant_id):
             await ws.close(code=4003, reason="Tenant service is temporarily suspended")
             return
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("Kill switch check failed, proceeding: %s", exc)
 
     # ── 3. WebSocket 수락 ─────────────────────────────────────────────────
@@ -191,10 +201,18 @@ async def vbgw_websocket(
     # ── 4. Lease Lock 획득 (중복 연결 방지) ──────────────────────────────
     if not await repo.acquire_session_lease(session_id):
         logger.warning("Lease conflict: session=%s", session_id)
-        await _send_events_direct(ws, [OutboundEvent("error", {
-            "code": "LEASE_CONFLICT",
-            "message": "동일 세션이 이미 연결 중입니다.",
-        })])
+        await _send_events_direct(
+            ws,
+            [
+                OutboundEvent(
+                    "error",
+                    {
+                        "code": "LEASE_CONFLICT",
+                        "message": "동일 세션이 이미 연결 중입니다.",
+                    },
+                )
+            ],
+        )
         await ws.close(code=4002, reason="Session lease conflict")
         unbind_request_context()
         return
@@ -208,10 +226,18 @@ async def vbgw_websocket(
     )
 
     if orchestrator is None:
-        await _send_events_direct(ws, [OutboundEvent("error", {
-            "code": "SESSION_ENDED",
-            "message": "이미 종료된 세션입니다.",
-        })])
+        await _send_events_direct(
+            ws,
+            [
+                OutboundEvent(
+                    "error",
+                    {
+                        "code": "SESSION_ENDED",
+                        "message": "이미 종료된 세션입니다.",
+                    },
+                )
+            ],
+        )
         await ws.close(code=4004, reason="Session already ended")
         await repo.release_session_lease(session_id)
         unbind_request_context()
@@ -227,7 +253,8 @@ async def vbgw_websocket(
 
     logger.info(
         "VBGW ready: session=%s tenant=%s reconnect=%s",
-        session_id, tenant_id,
+        session_id,
+        tenant_id,
         any(e.name == "reconnected" for e in initial_events),
     )
 
@@ -237,18 +264,27 @@ async def vbgw_websocket(
             # 비활성 타임아웃 체크
             if orchestrator.is_idle_timeout:
                 logger.info("Idle timeout: session=%s", session_id)
-                _enqueue_events(sender, [OutboundEvent("error", {
-                    "code": "IDLE_TIMEOUT",
-                    "message": "비활성으로 인해 세션이 종료됩니다.",
-                })])
+                _enqueue_events(
+                    sender,
+                    [
+                        OutboundEvent(
+                            "error",
+                            {
+                                "code": "IDLE_TIMEOUT",
+                                "message": "비활성으로 인해 세션이 종료됩니다.",
+                            },
+                        )
+                    ],
+                )
                 break
 
             # ping 주기로 수신 대기
             try:
                 data = await asyncio.wait_for(
-                    ws.receive(), timeout=PING_INTERVAL_SECONDS,
+                    ws.receive(),
+                    timeout=PING_INTERVAL_SECONDS,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _enqueue_events(sender, [OutboundEvent("ping")])
                 continue
 
@@ -256,20 +292,23 @@ async def vbgw_websocket(
 
             if msg_type == "websocket.receive":
                 raw_bytes = data.get("bytes")
-                raw_text  = data.get("text")
+                raw_text = data.get("text")
 
                 if raw_bytes:
                     events = await orchestrator.handle_audio(raw_bytes)
                 elif raw_text:
                     try:
-                        events = await orchestrator.handle_control(
-                            json.loads(raw_text)
-                        )
+                        events = await orchestrator.handle_control(json.loads(raw_text))
                     except json.JSONDecodeError:
-                        events = [OutboundEvent("error", {
-                            "code": "INVALID_JSON",
-                            "message": "잘못된 JSON 형식입니다.",
-                        })]
+                        events = [
+                            OutboundEvent(
+                                "error",
+                                {
+                                    "code": "INVALID_JSON",
+                                    "message": "잘못된 JSON 형식입니다.",
+                                },
+                            )
+                        ]
                 else:
                     events = []
 
@@ -286,12 +325,20 @@ async def vbgw_websocket(
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected: session=%s", session_id)
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Unexpected error: session=%s", session_id)
-        _enqueue_events(sender, [OutboundEvent("error", {
-            "code": "INTERNAL_ERROR",
-            "message": str(exc),
-        })])
+        _enqueue_events(
+            sender,
+            [
+                OutboundEvent(
+                    "error",
+                    {
+                        "code": "INTERNAL_ERROR",
+                        "message": str(exc),
+                    },
+                )
+            ],
+        )
 
     finally:
         # 단일 종료 경로 — orchestrator.end_session()은 _closed 플래그로
@@ -307,10 +354,8 @@ async def vbgw_websocket(
         await repo.release_session_lease(session_id)
         await decrement_session_count(tenant_id)
 
-        try:
+        with contextlib.suppress(Exception):
             await ws.close()
-        except Exception:  # noqa: BLE001
-            pass
 
         # 구조화 로그 context 정리 (Track 2-e) — 다음 WS 연결/태스크 재사용
         # 시 이전 session_id 가 섞여 들어가는 것을 방지. clear 는 '무슨 일이

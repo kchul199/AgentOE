@@ -10,39 +10,50 @@ Unit tests for AI Pipeline Degraded Mode
   - DEGRADED_MESSAGES 내용이 비어있지 않음
   - fsm.record_event(VENDOR_DEGRADED) 호출 확인
 """
+
 from __future__ import annotations
 
 import sys
 import unittest.mock as mock
-from dataclasses import dataclass
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 # 외부 의존성 mock
 for mod in [
-    "motor", "motor.motor_asyncio", "pymongo", "pymongo.errors",
-    "redis", "redis.asyncio",
-    "groq", "google.cloud", "google.cloud.texttospeech",
-    "google.cloud.texttospeech_v1", "grpc",
+    "motor",
+    "motor.motor_asyncio",
+    "pymongo",
+    "pymongo.errors",
+    "redis",
+    "redis.asyncio",
+    "groq",
+    "google.cloud",
+    "google.cloud.texttospeech",
+    "google.cloud.texttospeech_v1",
+    "grpc",
 ]:
     if mod not in sys.modules:
         sys.modules[mod] = mock.MagicMock()
 
 from app.domain.circuit_breaker import CircuitBreakerOpenError
-from app.domain.policy_gate import PolicyLevel
 from app.domain.session_fsm import SessionEventType, SessionFSM, SessionState
-from app.services.ai_pipeline import AIPipeline, DEGRADED_MESSAGES, PipelineResult
-from app.services.stt_service import STTResult
+from app.services.ai_pipeline import DEGRADED_MESSAGES, AIPipeline, PipelineResult
 from app.services.llm_service import LLMResult
+from app.services.stt_service import STTResult
 from app.services.tts_service import TTSResult
-
 
 # ── 픽스처 ─────────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def fsm():
-    return SessionFSM(SessionState.IDLE)
+    # pipeline.process() 진입 시 PROCESSING 전이를 시도하므로
+    # SPEAKING_DETECTED 상태에서 시작해야 한다 (IDLE → PROCESSING 전이 금지).
+    f = SessionFSM(SessionState.IDLE)
+    f.transition(SessionState.LISTENING)
+    f.transition(SessionState.SPEAKING_DETECTED)
+    return f
 
 
 @pytest.fixture
@@ -73,7 +84,13 @@ def normal_llm():
 
 @pytest.fixture
 def normal_tts():
-    return TTSResult(audio_bytes=b"\x00\x01\x02\x03", duration_ms=100.0)
+    return TTSResult(
+        audio_bytes=b"\x00\x01\x02\x03",
+        encoding="LINEAR16",
+        sample_rate_hz=8000,
+        duration_ms=100.0,
+        char_count=10,
+    )
 
 
 # ── 정상 파이프라인 ───────────────────────────────────────────────────────────
@@ -130,9 +147,7 @@ async def test_normal_pipeline_records_latency(pipeline, fsm, normal_stt, normal
 @pytest.mark.asyncio
 async def test_stt_circuit_breaker_open_returns_degraded(pipeline, fsm):
     """STT CircuitBreakerOpenError → degraded 응답."""
-    pipeline._stt.transcribe = AsyncMock(
-        side_effect=CircuitBreakerOpenError("groq-stt")
-    )
+    pipeline._stt.transcribe = AsyncMock(side_effect=CircuitBreakerOpenError("groq-stt"))
 
     with patch("app.services.ai_pipeline.record_pipeline_call") as mock_record:
         result = await pipeline.process(b"\x00", "s1", "t1", fsm)
@@ -162,9 +177,7 @@ async def test_stt_generic_exception_returns_degraded(pipeline, fsm):
 @pytest.mark.asyncio
 async def test_stt_degraded_records_vendor_degraded_event(pipeline, fsm):
     """STT 장애 시 FSM에 VENDOR_DEGRADED 이벤트 기록."""
-    pipeline._stt.transcribe = AsyncMock(
-        side_effect=CircuitBreakerOpenError("groq-stt")
-    )
+    pipeline._stt.transcribe = AsyncMock(side_effect=CircuitBreakerOpenError("groq-stt"))
     await pipeline.process(b"\x00", "s1", "t1", fsm)
 
     event_types = [e.event_type for e in fsm.events]
@@ -188,14 +201,10 @@ async def test_stt_degraded_skips_llm_and_tts(pipeline, fsm):
 
 
 @pytest.mark.asyncio
-async def test_llm_circuit_breaker_open_returns_degraded(
-    pipeline, fsm, normal_stt, normal_tts
-):
+async def test_llm_circuit_breaker_open_returns_degraded(pipeline, fsm, normal_stt, normal_tts):
     """LLM CircuitBreakerOpenError → degraded 응답, TTS 건너뜀."""
     pipeline._stt.transcribe = AsyncMock(return_value=normal_stt)
-    pipeline._llm.complete = AsyncMock(
-        side_effect=CircuitBreakerOpenError("groq-llm-primary")
-    )
+    pipeline._llm.complete = AsyncMock(side_effect=CircuitBreakerOpenError("groq-llm-primary"))
     pipeline._tts.synthesize = AsyncMock(return_value=normal_tts)
 
     result = await pipeline.process(b"\x00", "s1", "t1", fsm)
@@ -226,9 +235,7 @@ async def test_tts_failure_returns_text_only(pipeline, fsm, normal_stt, normal_l
     """TTS 장애 → llm_text 정상, audio_bytes=None (text-only 응답)."""
     pipeline._stt.transcribe = AsyncMock(return_value=normal_stt)
     pipeline._llm.complete = AsyncMock(return_value=normal_llm)
-    pipeline._tts.synthesize = AsyncMock(
-        side_effect=CircuitBreakerOpenError("google-tts")
-    )
+    pipeline._tts.synthesize = AsyncMock(side_effect=CircuitBreakerOpenError("google-tts"))
 
     result = await pipeline.process(b"\x00", "s1", "t1", fsm)
 
@@ -264,7 +271,7 @@ def test_degraded_messages_in_korean():
     for key in ["stt_unavailable", "llm_unavailable", "all_unavailable"]:
         msg = DEGRADED_MESSAGES[key]
         # 한국어 텍스트에는 한글 유니코드 범위 포함
-        has_korean = any("\uAC00" <= c <= "\uD7A3" for c in msg)
+        has_korean = any("\uac00" <= c <= "\ud7a3" for c in msg)
         assert has_korean, f"'{key}' 메시지에 한글 없음"
 
 

@@ -22,13 +22,14 @@ save_turn 최적화:
   find_one_and_update(return_document=BEFORE)로 세션 업데이트와 turn_index 획득을
   단일 MongoDB 왕복으로 처리합니다 (기존 별도 SELECT 제거).
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo import DESCENDING, ReturnDocument
 
 from app.core.database import get_database
@@ -40,7 +41,7 @@ from app.core.redis_client import (
     release_lease,
     set_session_state,
 )
-from app.domain.session_fsm import SessionFSM, SessionEventType
+from app.domain.session_fsm import SessionFSM
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class SessionRepository:
         await repo.end_session(session_id)
     """
 
-    def __init__(self, db: AsyncIOMotorDatabase | None = None) -> None:
+    def __init__(self, db: Any = None) -> None:
         # 생성자에서 즉시 resolve — 이후 col/history_col은 캐시된 인스턴스를 반환.
         # db=None 시 get_database()를 호출하여 lifespan에서 초기화된 전역 DB를 사용.
         # 테스트에서 db=mock_db를 주입하면 get_database() 호출이 완전히 차단됩니다.
@@ -96,7 +97,7 @@ class SessionRepository:
 
     async def create(self, session_data: dict[str, Any]) -> dict[str, Any]:
         """새 세션 레코드 생성 (MongoDB + Redis)."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         session_data.setdefault("created_at", now)
         session_data.setdefault("updated_at", now)
         session_data.setdefault("status", "IDLE")
@@ -159,9 +160,7 @@ class SessionRepository:
 
     # ── 재연결 복구 (핵심) ─────────────────────────────────────────────────────
 
-    async def restore_hot_state(
-        self, session_id: str
-    ) -> dict[str, Any] | None:
+    async def restore_hot_state(self, session_id: str) -> dict[str, Any] | None:
         """
         재연결 시 세션 상태 복원.
         경로 1: Redis hit → 즉시 반환 (P0 초저지연)
@@ -173,6 +172,13 @@ class SessionRepository:
         # 1. Redis 우선 조회
         hot = await get_session_state(session_id)
         if hot:
+            # ENDED 세션은 재연결 거부 (Redis 캐시에 남아있어도 동일)
+            if hot.get("status") == "ENDED":
+                logger.info(
+                    "Reconnect rejected: session already ENDED (Redis cache)",
+                    extra={"session_id": session_id},
+                )
+                return None
             logger.debug("Session restored from Redis", extra={"session_id": session_id})
             return hot
 
@@ -226,7 +232,7 @@ class SessionRepository:
         find_one_and_update(return_document=BEFORE)로 세션 업데이트와 turn_index 획득을
         단일 왕복으로 처리합니다. BEFORE 반환값의 history_count가 이 턴의 인덱스입니다.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         fsm_snapshot = fsm.to_snapshot()
 
         # ── MongoDB: 세션 업데이트 + turn_index 원자적 획득 ──────────────
@@ -247,15 +253,17 @@ class SessionRepository:
         turn_index = (before or {}).get("history_count", 0)
 
         # ── MongoDB: history 컬렉션에 턴 삽입 ────────────────────────────
-        await self._history_col.insert_one({
-            "session_id": session_id,
-            "turn_index": turn_index,
-            "user_text": user_text,
-            "ai_text": ai_text,
-            "policy_level": policy_level,
-            "latency": latency or {},
-            "created_at": now,
-        })
+        await self._history_col.insert_one(
+            {
+                "session_id": session_id,
+                "turn_index": turn_index,
+                "user_text": user_text,
+                "ai_text": ai_text,
+                "policy_level": policy_level,
+                "latency": latency or {},
+                "created_at": now,
+            }
+        )
 
         # ── Redis: hot-state 갱신 (최근 REDIS_HISTORY_TURNS 턴 유지) ──────
         hot = await get_session_state(session_id) or {}
@@ -263,7 +271,7 @@ class SessionRepository:
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": ai_text})
         if len(history) > REDIS_HISTORY_TURNS * 2:
-            history = history[-(REDIS_HISTORY_TURNS * 2):]
+            history = history[-(REDIS_HISTORY_TURNS * 2) :]
         hot["history"] = history
         hot["status"] = fsm.state.value
         hot["fsm_snapshot"] = fsm_snapshot
@@ -279,7 +287,7 @@ class SessionRepository:
         fsm: SessionFSM | None = None,
     ) -> None:
         """상태만 업데이트 (대화 히스토리 변경 없음)."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         update: dict[str, Any] = {
             "status": state,
             "updated_at": now,
@@ -320,7 +328,7 @@ class SessionRepository:
         Lease는 항상 vbgw.py finally 블록에서 repo.release_session_lease()로 해제됩니다.
         (Lease 획득도 vbgw.py에서 했으므로 해제도 같은 계층이 담당합니다.)
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         update: dict[str, Any] = {
             "status": "ENDED",
             "ended_at": now,
@@ -343,20 +351,20 @@ class SessionRepository:
 
     # ── Lease Lock ─────────────────────────────────────────────────────────────
 
-    async def acquire_session_lease(self, session_id: str) -> bool:
+    async def acquire_session_lease(self, session_id: str, tenant_id: str | None = None) -> bool:
         """
         세션 lease 획득 시도.
         동일 session_id로 중복 WebSocket 연결 방지.
         Returns True if acquired, False if already locked.
         """
-        return await acquire_lease(session_id)
+        return await acquire_lease(session_id, tenant_id=tenant_id)
 
-    async def release_session_lease(self, session_id: str) -> None:
+    async def release_session_lease(self, session_id: str, tenant_id: str | None = None) -> None:
         """
         세션 lease 해제.
         vbgw.py finally 블록에서 단일 경로로 호출됩니다.
         """
-        await release_lease(session_id)
+        await release_lease(session_id, tenant_id=tenant_id)
 
     # ── 이관 정보 저장 ──────────────────────────────────────────────────────────
 
@@ -366,7 +374,7 @@ class SessionRepository:
         transfer_info: dict[str, Any],
     ) -> None:
         """상담사 이관 정보 MongoDB에 저장."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         await self._col.update_one(
             {"session_id": session_id},
             {

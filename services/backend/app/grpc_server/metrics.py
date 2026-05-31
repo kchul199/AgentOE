@@ -9,6 +9,7 @@ gRPC server 메트릭 — vbgw bridge ↔ backend 통신 관측.
     `agentoe_call_duration_seconds` 도 backend 가 노출 (vbgw 가 stable 해질 때까지
     backend 가 백업 발화원). 라벨/이름 docs/reference/slo.md 와 정확히 일치.
 """
+
 from __future__ import annotations
 
 import logging

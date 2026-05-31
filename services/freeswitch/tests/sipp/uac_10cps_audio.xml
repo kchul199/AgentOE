@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  uac_10cps_audio.xml — SIPp UAC 10 CPS 부하 테스트 시나리오 (오디오 포함)
+  변경이력: v1.0.0 | 2026-05-05 | Phase-T | 10 CPS × 10분 agentoe 전체 스택 부하
+
+  호출 흐름:
+    SIPp ──INVITE──► FreeSwitch :5060
+         ◄──100/180── FS (ring_ready)
+         ◄──200 OK─── FS (answer + audio_fork 시작 → vbgw-bridge → backend gRPC)
+         ──ACK──────► FS
+         ~~RTP(PCMU)~ 양방향 오디오 30초
+         ──BYE──────► FS
+         ◄──200 OK─── FS (세션 정리)
+
+  응답 시간 측정:
+    rtd="true" on 200 OK → Call Setup Time (INVITE → 200 OK)
+    CallLengthRepartition → 통화 지속 시간 분포
+
+  SIPp 실행 명령 (직접):
+    sipp -sf uac_10cps_audio.xml \
+      -s 7000 -r 10 -rp 1000 -d 30000 -l 300 -m 6000 \
+      -mi 127.0.0.1 -mp 20000 \
+      -trace_stat -stf results/stats.csv \
+      -trace_err  -ef results/errors.log \
+      127.0.0.1:5060
+
+  Docker 실행:
+    docker compose -f docker/compose.sipp.yml run --rm sipp \
+      -sf /scenarios/uac_10cps_audio.xml \
+      -s 7000 -r 10 -rp 1000 -d 30000 -l 300 -m 6000 \
+      freeswitch:5060
+
+  파라미터 의미:
+    -r 10 -rp 1000  → 1000ms 당 10콜 = 10 CPS
+    -d 30000        → 통화 유지 시간 30초 (pause 길이)
+    -l 300          → 최대 동시 300콜 (10 CPS × 30s)
+    -m 6000         → 총 6,000콜 (10분 분량)
+    -mi / -mp       → RTP 미디어 IP/포트 (PCMU 주입)
+-->
+<scenario name="agentoe VoiceBot 10CPS Load Test">
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       1. INVITE — agentoe 전용 헤더 포함
+       X-Tenant-ID : 멀티 테넌트 라우팅 키 (vbgw-orchestrator 사용)
+       X-Client-ID : 세션 식별 (backend JWT sub 대응)
+  ═══════════════════════════════════════════════════════════════ -->
+  <send retrans="500">
+    <![CDATA[
+      INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "LoadTest [call_number]" <sip:loadtest[call_number]@[local_ip]:[local_port]>;tag=[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 1 INVITE
+      Contact: <sip:loadtest[call_number]@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      X-Tenant-ID: load-test-tenant
+      X-Client-ID: sipp-[call_number]
+      X-Load-Test: true
+      User-Agent: SIPp/agentoe-load-test
+      Allow: INVITE, ACK, BYE, CANCEL, INFO, OPTIONS, PRACK, UPDATE
+      Supported: timer, 100rel
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=sipp 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=agentoe Load Test [call_number]
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+      a=ptime:20
+      a=maxptime:150
+      a=sendrecv
+    ]]>
+  </send>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       2. 프로비저널 응답 수신 (선택적)
+  ═══════════════════════════════════════════════════════════════ -->
+  <!-- 100 Trying -->
+  <recv response="100" optional="true" />
+
+  <!-- 180 Ringing — FreeSwitch ring_ready 확인 -->
+  <recv response="180" optional="true">
+    <action>
+      <ereg regexp="X-VBGW-Capacity-Full:\s*true"
+            search_in="msg"
+            check_it="false"
+            assign_to="1,capacity_full" />
+    </action>
+  </recv>
+
+  <!-- 183 Session Progress (Early Media 경로) -->
+  <recv response="183" optional="true" />
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       3. 200 OK — 콜 설정 완료. rtd="true" 로 INVITE→200 시간 측정.
+          Contact 헤더에서 원격 URI 추출 (재초대/BYE 에 사용)
+  ═══════════════════════════════════════════════════════════════ -->
+  <recv response="200" rtd="true">
+    <action>
+      <ereg regexp="[Cc]ontact:\s*.*?<sip:([^>]+)>"
+            search_in="msg"
+            check_it="false"
+            assign_to="1,remote_uri" />
+      <ereg regexp="[Tt]o:.*?tag=([^\s;>]+)"
+            search_in="msg"
+            check_it="false"
+            assign_to="2,to_tag" />
+    </action>
+  </recv>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       4. ACK
+  ═══════════════════════════════════════════════════════════════ -->
+  <send>
+    <![CDATA[
+      ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "LoadTest [call_number]" <sip:loadtest[call_number]@[local_ip]:[local_port]>;tag=[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 1 ACK
+      Contact: <sip:loadtest[call_number]@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       5. RTP 오디오 주입 (PCMU 무음 프레임)
+          -mi 플래그로 외부 미디어 IP 지정 시 SIPp 가 RTP를 직접 처리.
+          pcap 파일이 있으면 play_pcap_audio 로 교체 가능.
+
+          실제 발화 시뮬레이션: VAD 트리거를 위해 silence가 아닌
+          실제 PCM 파일을 사용하려면:
+            <exec play_pcap_audio="[SIPP_SCENARIO_DIR]/audio/speech_30s.pcap"/>
+  ═══════════════════════════════════════════════════════════════ -->
+  <nop>
+    <action>
+      <!-- RTP echo 모드 활성화 — FreeSwitch 에서 들어오는 RTP를 그대로 반향 -->
+      <exec int_cmd="start_rtp_stream" />
+    </action>
+  </nop>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       6. 통화 유지 (-d 플래그로 ms 단위 조절, 기본 30초)
+          이 pause 동안 RTP 양방향 스트리밍 진행.
+          vbgw-bridge VAD 가 활성화되어 있으면 오디오를 backend 로 포워딩.
+  ═══════════════════════════════════════════════════════════════ -->
+  <pause />
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       7. BYE — 정상 통화 종료
+  ═══════════════════════════════════════════════════════════════ -->
+  <send retrans="500">
+    <![CDATA[
+      BYE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "LoadTest [call_number]" <sip:loadtest[call_number]@[local_ip]:[local_port]>;tag=[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 2 BYE
+      Contact: <sip:loadtest[call_number]@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      Reason: Q.850;cause=16;text="Normal Clearing"
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- BYE 200 OK -->
+  <recv response="200" crlf="true" />
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       측정 히스토그램 정의
+       ResponseTimeRepartition : INVITE → 200 OK 응답 시간 (ms)
+       CallLengthRepartition   : 통화 지속 시간 분포 (ms)
+       → CSV stats 에서 SLO 분석에 사용
+  ═══════════════════════════════════════════════════════════════ -->
+  <ResponseTimeRepartition value="50, 100, 150, 200, 300, 500, 750, 1000, 2000, 5000" />
+  <CallLengthRepartition   value="1000, 5000, 10000, 20000, 30000, 60000, 120000, 300000" />
+
+</scenario>

@@ -1,7 +1,8 @@
 """Kill Switch middleware — blocks requests when active."""
+
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.core.redis_client import get_kill_switch_cached
 from app.domain.kill_switch import KillSwitchScope
@@ -22,7 +23,7 @@ class KillSwitchMiddleware(BaseHTTPMiddleware):
     캐시 히트 시 ~0.1ms 오버헤드.
     """
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # 예외 경로 스킵
         if request.url.path in EXEMPT_PATHS:
             return await call_next(request)
@@ -30,9 +31,7 @@ class KillSwitchMiddleware(BaseHTTPMiddleware):
         # 테넌트 컨텍스트 추출 (JWT 파싱 전이므로 헤더에서)
         tenant_id = request.headers.get("X-Tenant-ID")
         if tenant_id:
-            active = await get_kill_switch_cached(
-                KillSwitchScope.TENANT.value, tenant_id
-            )
+            active = await get_kill_switch_cached(KillSwitchScope.TENANT.value, tenant_id)
             # 캐시 미스 → 미들웨어에서는 패스 (라우터 레벨에서 DB 조회)
             if active is True:
                 return JSONResponse(

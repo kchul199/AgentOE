@@ -13,13 +13,12 @@ Degraded Mode Matrix:
   TTS 장애  → 텍스트 응답만 반환 (audio_bytes=None, degraded=True)
   전체 장애 → 이관 트리거용 "DEGRADED" 플래그 반환
 """
+
 from __future__ import annotations
 
-import asyncio
-import logging
 import time
-from dataclasses import dataclass, field
-from typing import AsyncIterator, Any
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 import structlog
 
@@ -28,8 +27,8 @@ from app.core.metrics import record_pipeline_call
 from app.domain.circuit_breaker import CircuitBreakerOpenError, get_all_statuses
 from app.domain.policy_gate import PolicyGate, PolicyLevel
 from app.domain.session_fsm import SessionEventType, SessionFSM, SessionState
+from app.services.llm_service import LLMChunk, LLMService
 from app.services.stt_service import STTService
-from app.services.llm_service import LLMService, LLMChunk
 from app.services.tts_service import TTSService
 
 logger = structlog.get_logger(__name__)
@@ -57,8 +56,7 @@ DEGRADED_MESSAGES = {
         ""
     ),
     "all_unavailable": (
-        "현재 AI 서비스에 장애가 발생하여 상담사로 연결해 드리겠습니다. "
-        "잠시만 기다려 주세요."
+        "현재 AI 서비스에 장애가 발생하여 상담사로 연결해 드리겠습니다. 잠시만 기다려 주세요."
     ),
 }
 
@@ -72,7 +70,7 @@ class PipelineResult:
     policy_allowed: bool
     latency: dict[str, float]
     filler_triggered: bool = False
-    degraded: bool = False            # True이면 벤더 장애로 fallback 응답
+    degraded: bool = False  # True이면 벤더 장애로 fallback 응답
     degraded_stage: str | None = None  # "stt" / "llm" / "tts" / "all"
 
 
@@ -168,8 +166,10 @@ class AIPipeline:
             total_ms = (time.monotonic() - pipeline_start) * 1000
             latency["total_ms"] = total_ms
             record_pipeline_call(
-                tenant_id=tenant_id, success=True,
-                total_ms=total_ms, stt_ms=latency.get("stt_ms", 0),
+                tenant_id=tenant_id,
+                success=True,
+                total_ms=total_ms,
+                stt_ms=latency.get("stt_ms", 0),
             )
             unbind_keys("pipeline_stage", "policy_level")
             return PipelineResult(
@@ -301,7 +301,5 @@ class AIPipeline:
         return {
             "circuit_breakers": get_all_statuses(),
             "latency_budget": LATENCY_BUDGET,
-            "degraded_messages": {
-                k: bool(v) for k, v in DEGRADED_MESSAGES.items()
-            },
+            "degraded_messages": {k: bool(v) for k, v in DEGRADED_MESSAGES.items()},
         }

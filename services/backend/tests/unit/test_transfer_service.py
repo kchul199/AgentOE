@@ -9,14 +9,14 @@ Unit tests for TransferService
 - build_context_summary 대화 요약
 - 재시도 최대 횟수 제한
 """
-import asyncio
+
+from unittest.mock import AsyncMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.domain.session_fsm import SessionFSM, SessionState
 from app.repositories.session_repository import SessionRepository
 from app.services.transfer_service import (
-    MAX_TRANSFER_RETRIES,
     TransferFallback,
     TransferReason,
     TransferRequest,
@@ -24,7 +24,6 @@ from app.services.transfer_service import (
     TransferService,
     TransferStatus,
 )
-
 
 # ── 픽스처 ─────────────────────────────────────────────────────────────────────
 
@@ -97,9 +96,7 @@ async def test_transfer_accepted_message_contains_agent_name(
 @pytest.mark.asyncio
 async def test_transfer_accepted_persists_info(fsm_listening, transfer_req, mock_repo):
     """이관 수락 시 MongoDB에 이관 정보 저장 확인."""
-    svc = make_service(mock_repo, TransferResult(
-        status=TransferStatus.ACCEPTED, agent_id="a1"
-    ))
+    svc = make_service(mock_repo, TransferResult(status=TransferStatus.ACCEPTED, agent_id="a1"))
     await svc.request(fsm_listening, transfer_req)
     mock_repo.save_transfer_info.assert_called_once()
 
@@ -110,13 +107,14 @@ async def test_transfer_accepted_persists_info(fsm_listening, transfer_req, mock
 @pytest.mark.asyncio
 async def test_transfer_failed_callback_fallback(fsm_listening, transfer_req, mock_repo):
     """이관 실패 + CALLBACK fallback → TRANSFER_FAILED 상태."""
-    svc = make_service(mock_repo, TransferResult(
-        status=TransferStatus.FAILED,
-        message="가용 상담사 없음",
-    ))
-    result = await svc.request(
-        fsm_listening, transfer_req, fallback=TransferFallback.CALLBACK
+    svc = make_service(
+        mock_repo,
+        TransferResult(
+            status=TransferStatus.FAILED,
+            message="가용 상담사 없음",
+        ),
     )
+    result = await svc.request(fsm_listening, transfer_req, fallback=TransferFallback.CALLBACK)
 
     assert result.status == TransferStatus.FALLBACK_CALLBACK
     assert result.fallback_action == TransferFallback.CALLBACK
@@ -127,12 +125,8 @@ async def test_transfer_failed_callback_fallback(fsm_listening, transfer_req, mo
 @pytest.mark.asyncio
 async def test_transfer_failed_ai_resume_fallback(fsm_listening, transfer_req, mock_repo):
     """이관 실패 + AI_RESUME fallback → LISTENING 복귀."""
-    svc = make_service(mock_repo, TransferResult(
-        status=TransferStatus.FAILED
-    ))
-    result = await svc.request(
-        fsm_listening, transfer_req, fallback=TransferFallback.AI_RESUME
-    )
+    svc = make_service(mock_repo, TransferResult(status=TransferStatus.FAILED))
+    result = await svc.request(fsm_listening, transfer_req, fallback=TransferFallback.AI_RESUME)
 
     assert result.status == TransferStatus.FALLBACK_AI_RESUME
     assert fsm_listening.state == SessionState.LISTENING
@@ -141,13 +135,14 @@ async def test_transfer_failed_ai_resume_fallback(fsm_listening, transfer_req, m
 @pytest.mark.asyncio
 async def test_transfer_timeout_triggers_callback(fsm_listening, transfer_req, mock_repo):
     """CTI 타임아웃 → CALLBACK fallback."""
-    svc = make_service(mock_repo, TransferResult(
-        status=TransferStatus.TIMED_OUT,
-        message="시간 초과",
-    ))
-    result = await svc.request(
-        fsm_listening, transfer_req, fallback=TransferFallback.CALLBACK
+    svc = make_service(
+        mock_repo,
+        TransferResult(
+            status=TransferStatus.TIMED_OUT,
+            message="시간 초과",
+        ),
     )
+    result = await svc.request(fsm_listening, transfer_req, fallback=TransferFallback.CALLBACK)
     assert result.fallback_action == TransferFallback.CALLBACK
 
 
@@ -164,16 +159,12 @@ async def test_transfer_retry_eventually_succeeds(fsm_listening, transfer_req, m
         call_count += 1
         if call_count == 1:
             return TransferResult(status=TransferStatus.FAILED)
-        return TransferResult(
-            status=TransferStatus.ACCEPTED, agent_id="agent-x"
-        )
+        return TransferResult(status=TransferStatus.ACCEPTED, agent_id="agent-x")
 
     svc = TransferService(session_repo=mock_repo)
     svc._dispatch_to_cti = side_effect
 
-    result = await svc.request(
-        fsm_listening, transfer_req, fallback=TransferFallback.RETRY
-    )
+    result = await svc.request(fsm_listening, transfer_req, fallback=TransferFallback.RETRY)
 
     assert result.status == TransferStatus.ACCEPTED
     assert call_count == 2
@@ -190,9 +181,7 @@ async def test_transfer_retry_max_exceeded(mock_repo):
         context_summary="test",
     )
     svc = TransferService(session_repo=mock_repo)
-    svc._dispatch_to_cti = AsyncMock(return_value=TransferResult(
-        status=TransferStatus.FAILED
-    ))
+    svc._dispatch_to_cti = AsyncMock(return_value=TransferResult(status=TransferStatus.FAILED))
 
     result = await svc.request(fsm, req, fallback=TransferFallback.RETRY)
 
@@ -230,7 +219,7 @@ async def test_transfer_fails_gracefully_from_ended_state(mock_repo):
 @pytest.mark.asyncio
 async def test_mock_cti_always_returns_failed(mock_repo):
     """CTI 미연동 Mock: 항상 FAILED 반환."""
-    fsm = SessionFSM(SessionState.LISTENING)
+    SessionFSM(SessionState.LISTENING)
     req = TransferRequest(
         session_id="s1",
         tenant_id="t1",
@@ -246,15 +235,18 @@ async def test_mock_cti_always_returns_failed(mock_repo):
 # ── detect_transfer_intent 테스트 ────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("text,expected", [
-    ("상담사 연결해줘", True),
-    ("사람이랑 통화하고 싶어요", True),
-    ("담당자 바꿔주세요", True),
-    ("배송 조회해줘", False),
-    ("영업시간 알려줘", False),
-    ("agent please", True),
-    ("직원 연결 부탁해", True),
-])
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("상담사 연결해줘", True),
+        ("사람이랑 통화하고 싶어요", True),
+        ("담당자 바꿔주세요", True),
+        ("배송 조회해줘", False),
+        ("영업시간 알려줘", False),
+        ("agent please", True),
+        ("직원 연결 부탁해", True),
+    ],
+)
 def test_detect_transfer_intent(text, expected):
     assert TransferService.detect_transfer_intent(text) == expected
 

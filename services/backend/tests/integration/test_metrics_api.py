@@ -11,46 +11,50 @@ Integration tests — Metrics API 엔드포인트
   - 인증 없을 때 401 반환 검증 (/prometheus 제외)
   - record_pipeline_call() 후 조회 시 반영 확인
 """
-from __future__ import annotations
 
-import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch
+from __future__ import annotations
 
 # 외부 의존성 mock (DB/Redis 없이 실행)
 import sys
 import unittest.mock as mock
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
 
 for mod in [
-    "motor", "motor.motor_asyncio",
-    "pymongo", "pymongo.errors",
-    "redis", "redis.asyncio",
-    "groq", "google.cloud", "google.cloud.texttospeech",
+    "motor",
+    "motor.motor_asyncio",
+    "pymongo",
+    "pymongo.errors",
+    "redis",
+    "redis.asyncio",
+    "groq",
+    "google.cloud",
+    "google.cloud.texttospeech",
     "google.cloud.texttospeech_v1",
     "grpc",
 ]:
     if mod not in sys.modules:
         sys.modules[mod] = mock.MagicMock()
 
+from app.core.auth import create_access_token
 from app.core.metrics import (
-    _store,
     _MetricsStore,
+    dec_active_sessions,
+    inc_active_sessions,
     record_pipeline_call,
     record_transfer_request,
-    inc_active_sessions,
-    dec_active_sessions,
-    get_pipeline_stats,
-    generate_prometheus_metrics,
 )
-from app.core.auth import create_access_token
-
 
 # ── 픽스처 ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(autouse=True)
 def reset_metrics():
     """각 테스트 전 메트릭 스토어 초기화."""
     import app.core.metrics as m
+
     m._store = _MetricsStore()
     yield
     m._store = _MetricsStore()
@@ -59,14 +63,20 @@ def reset_metrics():
 @pytest.fixture
 def client():
     """FastAPI TestClient — DB/Redis lifespan을 mock으로 대체."""
-    with patch("app.core.database.init_db", new_callable=AsyncMock), \
-         patch("app.core.database.close_db", new_callable=AsyncMock), \
-         patch("app.core.redis_client.init_redis", new_callable=AsyncMock), \
-         patch("app.core.redis_client.close_redis", new_callable=AsyncMock), \
-         patch("app.core.redis_client.get_redis", return_value=AsyncMock()), \
-         patch("app.domain.kill_switch.KillSwitchService.is_active",
-               new_callable=AsyncMock, return_value=False):
+    with (
+        patch("app.core.database.init_db", new_callable=AsyncMock),
+        patch("app.core.database.close_db", new_callable=AsyncMock),
+        patch("app.core.redis_client.init_redis", new_callable=AsyncMock),
+        patch("app.core.redis_client.close_redis", new_callable=AsyncMock),
+        patch("app.core.redis_client.get_redis", return_value=AsyncMock()),
+        patch(
+            "app.domain.kill_switch.KillSwitchService.is_active",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
         from app.main import app
+
         with TestClient(app, raise_server_exceptions=False) as c:
             yield c
 
@@ -82,12 +92,13 @@ def auth_headers():
 
 def test_pipeline_metrics_requires_auth(client):
     resp = client.get("/api/v1/metrics/pipeline")
-    assert resp.status_code == 403
+    # FastAPI 0.136+ 에서 HTTPBearer 미인증 시 401 반환 (이전 버전은 403)
+    assert resp.status_code == 401
 
 
 def test_sessions_metrics_requires_auth(client):
     resp = client.get("/api/v1/metrics/sessions")
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
 def test_prometheus_no_auth_required(client):
@@ -148,8 +159,12 @@ def test_pipeline_budget_compliance(client, auth_headers):
     # 모두 예산 내
     for _ in range(20):
         record_pipeline_call(
-            tenant_id="tenant-001", success=True,
-            total_ms=1000.0, stt_ms=200.0, llm_ms=300.0, tts_ms=100.0,
+            tenant_id="tenant-001",
+            success=True,
+            total_ms=1000.0,
+            stt_ms=200.0,
+            llm_ms=300.0,
+            tts_ms=100.0,
         )
 
     resp = client.get("/api/v1/metrics/pipeline", headers=auth_headers)
@@ -162,8 +177,10 @@ def test_pipeline_budget_violation(client, auth_headers):
     """P95가 예산 초과하면 compliance False."""
     for _ in range(20):
         record_pipeline_call(
-            tenant_id="tenant-001", success=True,
-            total_ms=5000.0, stt_ms=800.0,  # STT 예산(500ms) 초과
+            tenant_id="tenant-001",
+            success=True,
+            total_ms=5000.0,
+            stt_ms=800.0,  # STT 예산(500ms) 초과
         )
 
     resp = client.get("/api/v1/metrics/pipeline", headers=auth_headers)

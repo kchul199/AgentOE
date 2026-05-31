@@ -9,10 +9,10 @@ Unit tests for Session Recovery
 - SessionRepository.save_turn (MongoDB + Redis 동기)
 - _restore_or_create_session 헬퍼 (신규 / 재연결 / ENDED 거부)
 """
-import json
+
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.domain.session_fsm import (
     SessionEventType,
@@ -20,7 +20,6 @@ from app.domain.session_fsm import (
     SessionState,
 )
 from app.repositories.session_repository import SessionRepository
-
 
 # ── SessionFSM TRANSFER 상태 전이 ─────────────────────────────────────────────
 
@@ -84,9 +83,7 @@ def test_is_transfer_in_progress_false():
 
 
 def test_is_active_true_for_non_ended():
-    for state in [
-        SessionState.IDLE, SessionState.LISTENING, SessionState.TRANSFER_REQUESTED
-    ]:
+    for state in [SessionState.IDLE, SessionState.LISTENING, SessionState.TRANSFER_REQUESTED]:
         assert SessionFSM(state).is_active is True
 
 
@@ -157,13 +154,14 @@ def test_from_snapshot_empty_dict_defaults_to_idle():
 
 def test_snapshot_roundtrip_preserves_metadata():
     fsm = SessionFSM(SessionState.IDLE)
-    fsm.transition(SessionState.TRANSFER_REQUESTED,
-                   metadata={"reason": "G4_POLICY", "priority": 3})
+    fsm.transition(SessionState.LISTENING)  # IDLE → LISTENING (required step)
+    fsm.transition(SessionState.TRANSFER_REQUESTED, metadata={"reason": "G4_POLICY", "priority": 3})
     snapshot = fsm.to_snapshot()
     restored = SessionFSM.from_snapshot(snapshot)
 
     transfer_event = next(
-        e for e in restored.events
+        e
+        for e in restored.events
         if e.event_type == SessionEventType.STATE_CHANGED
         and e.to_state == SessionState.TRANSFER_REQUESTED
     )
@@ -185,8 +183,9 @@ async def test_restore_hot_state_redis_hit():
     }
     repo = SessionRepository()
 
-    with patch("app.repositories.session_repository.get_session_state",
-               new=AsyncMock(return_value=hot)):
+    with patch(
+        "app.repositories.session_repository.get_session_state", new=AsyncMock(return_value=hot)
+    ):
         result = await repo.restore_hot_state("sess-001")
 
     assert result is not None
@@ -206,13 +205,15 @@ async def test_restore_hot_state_redis_miss_mongo_fallback():
     }
     repo = SessionRepository()
 
-    with patch("app.repositories.session_repository.get_session_state",
-               new=AsyncMock(return_value=None)), \
-         patch.object(repo, "get_by_id", new=AsyncMock(return_value=mongo_doc)), \
-         patch.object(repo, "get_recent_history", new=AsyncMock(return_value=[])), \
-         patch("app.repositories.session_repository.set_session_state",
-               new=AsyncMock()) as mock_set:
-
+    with (
+        patch(
+            "app.repositories.session_repository.get_session_state",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(repo, "get_by_id", new=AsyncMock(return_value=mongo_doc)),
+        patch.object(repo, "get_recent_history", new=AsyncMock(return_value=[])),
+        patch("app.repositories.session_repository.set_session_state", new=AsyncMock()) as mock_set,
+    ):
         result = await repo.restore_hot_state("sess-002")
 
     assert result is not None
@@ -226,8 +227,9 @@ async def test_restore_hot_state_ended_session_returns_none():
     hot = {"status": "ENDED"}
     repo = SessionRepository()
 
-    with patch("app.repositories.session_repository.get_session_state",
-               new=AsyncMock(return_value=hot)):
+    with patch(
+        "app.repositories.session_repository.get_session_state", new=AsyncMock(return_value=hot)
+    ):
         result = await repo.restore_hot_state("sess-ended")
 
     assert result is None
@@ -237,48 +239,53 @@ async def test_restore_hot_state_ended_session_returns_none():
 async def test_restore_hot_state_not_found_returns_none():
     """MongoDB에도 없으면 None 반환."""
     from app.core.exceptions import SessionNotFoundError
+
     repo = SessionRepository()
 
-    with patch("app.repositories.session_repository.get_session_state",
-               new=AsyncMock(return_value=None)), \
-         patch.object(repo, "get_by_id",
-                      side_effect=SessionNotFoundError("sess-new")):
-
+    with (
+        patch(
+            "app.repositories.session_repository.get_session_state",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(repo, "get_by_id", side_effect=SessionNotFoundError("sess-new")),
+    ):
         result = await repo.restore_hot_state("sess-new")
 
     assert result is None
 
 
-# ── _restore_or_create_session 통합 테스트 ───────────────────────────────────
+# ── restore_or_create_orchestrator 통합 테스트 ──────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_restore_creates_new_session_when_not_found():
-    """Redis/MongoDB에 세션 없음 → 신규 세션 생성."""
-    from app.api.v1.routers.vbgw import _restore_or_create_session
+    """Redis/MongoDB에 세션 없음 → 신규 세션 생성, 'connected' 이벤트 반환."""
+    from app.services.call_session_orchestrator import restore_or_create_orchestrator
 
-    mock_ws = AsyncMock()
     mock_repo = AsyncMock(spec=SessionRepository)
     mock_repo.restore_hot_state.return_value = None
     mock_repo.create = AsyncMock(return_value={})
 
-    session = await _restore_or_create_session(
-        ws=mock_ws,
+    orchestrator, initial_events = await restore_or_create_orchestrator(
         session_id="new-sess",
         tenant_id="t1",
         client_id="c1",
         repo=mock_repo,
     )
 
-    assert session is not None
-    assert session._is_reconnect is False
+    assert orchestrator is not None
     mock_repo.create.assert_called_once()
+    # 신규 세션 → 'connected' 이벤트 (reconnected=False)
+    assert len(initial_events) == 1
+    assert initial_events[0].name == "connected"
+    payload = initial_events[0].payload
+    assert payload.get("reconnected") is False
 
 
 @pytest.mark.asyncio
 async def test_restore_reconnects_existing_session():
-    """Redis에 세션 있음 → 재연결 복구."""
-    from app.api.v1.routers.vbgw import _restore_or_create_session
+    """Redis에 세션 있음 → 재연결 복구, 'reconnected' 이벤트 + history 복원."""
+    from app.services.call_session_orchestrator import restore_or_create_orchestrator
 
     hot = {
         "status": "LISTENING",
@@ -290,38 +297,44 @@ async def test_restore_reconnects_existing_session():
         "tenant_id": "t1",
         "client_id": "c1",
     }
-    mock_ws = AsyncMock()
     mock_repo = AsyncMock(spec=SessionRepository)
     mock_repo.restore_hot_state.return_value = hot
 
-    session = await _restore_or_create_session(
-        ws=mock_ws,
+    orchestrator, initial_events = await restore_or_create_orchestrator(
         session_id="exist-sess",
         tenant_id="t1",
         client_id="c1",
         repo=mock_repo,
     )
 
-    assert session is not None
-    assert session._is_reconnect is True
-    assert len(session.history) == 2
+    assert orchestrator is not None
+    assert len(orchestrator.history) == 2
+    # 재연결 세션 → 'reconnected' 이벤트
+    assert len(initial_events) == 1
+    assert initial_events[0].name == "reconnected"
 
 
 @pytest.mark.asyncio
 async def test_restore_rejects_ended_session():
-    """ENDED 세션 → None 반환."""
-    from app.api.v1.routers.vbgw import _restore_or_create_session
+    """ENDED 세션 → (None, []) 반환."""
+    from app.services.call_session_orchestrator import restore_or_create_orchestrator
 
-    mock_ws = AsyncMock()
     mock_repo = AsyncMock(spec=SessionRepository)
-    mock_repo.restore_hot_state.return_value = None  # ENDED → None
+    # restore_hot_state 는 ENDED 세션에 대해 None 반환 (session_repository 구현)
+    mock_repo.restore_hot_state.return_value = None
+    # create 는 호출되지 않아야 함 — ended session 재생성 방지
+    # NOTE: hot_state=None 이면 신규 세션을 생성한다.
+    # ENDED 거부는 restore_hot_state 가 None 을 반환하는 경로가 아닌,
+    # hot_state["status"] == "ENDED" 경로로 처리된다.
+    # 따라서 이 테스트는 hot_state 에 ENDED 를 직접 주입한다.
+    mock_repo.restore_hot_state.return_value = {"status": "ENDED"}
 
-    session = await _restore_or_create_session(
-        ws=mock_ws,
+    orchestrator, initial_events = await restore_or_create_orchestrator(
         session_id="ended-sess",
         tenant_id="t1",
         client_id="c1",
         repo=mock_repo,
     )
 
-    assert session is None
+    assert orchestrator is None
+    assert initial_events == []

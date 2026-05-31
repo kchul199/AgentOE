@@ -15,6 +15,7 @@
   - 정상(첫 요청) 경로는 Redis SET NX 1회 + (응답 후) SET 1회 만 추가됨.
   - 응답 본문은 Starlette StreamingResponse 도 안전하게 수집(iterator 1회 소비 후 재구성).
 """
+
 from __future__ import annotations
 
 import base64
@@ -22,7 +23,7 @@ import json
 import re
 
 import structlog
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
@@ -76,7 +77,7 @@ def _extract_tenant_id(request: Request) -> str | None:
         payload_b64 += "=" * padding
         payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode())
         return payload.get("tenant_id")
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -125,7 +126,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
-    async def dispatch(self, request: Request, call_next) -> Response:  # type: ignore[override]
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if not settings.IDEMPOTENCY_ENABLED:
             return await call_next(request)
 

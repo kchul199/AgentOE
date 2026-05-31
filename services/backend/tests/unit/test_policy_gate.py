@@ -1,5 +1,7 @@
 """Unit tests for Policy Gate."""
+
 import pytest
+
 from app.domain.policy_gate import PolicyGate, PolicyLevel
 
 
@@ -21,7 +23,7 @@ async def test_g5_always_denied():
 @pytest.mark.asyncio
 async def test_g3_requires_sms_auth():
     gate = PolicyGate()
-    result = await gate.evaluate("account_transfer", PolicyLevel.G3, {}, auth_state={})
+    result = await gate.evaluate("account_transfer", PolicyLevel.G3, {}, session_auth_state={})
     assert result.allowed is False
     assert "sms_otp" in result.required_steps
 
@@ -29,5 +31,7 @@ async def test_g3_requires_sms_auth():
 @pytest.mark.asyncio
 async def test_g3_passes_with_sms_verified():
     gate = PolicyGate()
-    result = await gate.evaluate("account_transfer", PolicyLevel.G3, {}, auth_state={"sms_verified": True})
+    result = await gate.evaluate(
+        "account_transfer", PolicyLevel.G3, {}, session_auth_state={"sms_verified": True}
+    )
     assert result.allowed is True

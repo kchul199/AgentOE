@@ -17,15 +17,41 @@
     payload → Scenario(**payload)  (Pydantic v2 strict, extra=forbid, graph 검증)
       → ScenarioRepository.save()  (새 버전 채번)
 """
+
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import ValidationError
+
+
+def _sanitize_pydantic_errors(errors: list[Any]) -> list[dict[str, Any]]:
+    """Pydantic v2 errors 의 ctx.error (Exception 인스턴스)를 str 로 변환 — JSON 직렬화 보장.
+
+    Pydantic v2 의 `e.errors()` 는 `ctx: {'error': SomeException(...)}` 를 포함할 수 있다.
+    Exception 객체는 JSON 직렬화 불가 → HTTPException detail 에 넣으면 500.
+    """
+    clean = []
+    for err in errors:
+        e = dict(err)
+        # ctx.error: Exception → str
+        if "ctx" in e:
+            ctx = dict(e["ctx"])
+            if "error" in ctx and isinstance(ctx["error"], Exception):
+                ctx["error"] = str(ctx["error"])
+            e["ctx"] = ctx
+        # input 은 보안 상 + 크기 이슈로 제거
+        e.pop("input", None)
+        # url 은 debug 용 — 제거해도 무방
+        e.pop("url", None)
+        clean.append(e)
+    return clean
+
 
 from app.agentic.scenario_dsl import Scenario
 from app.core.auth import TenantContext, get_current_tenant, require_roles
+from app.domain.audit_emitter import AuditEmitter, get_audit_emitter
 from app.repositories.scenario_repository import (
     ScenarioConflictError,
     ScenarioNotFoundError,
@@ -37,6 +63,7 @@ router = APIRouter()
 
 # ── 목록 ─────────────────────────────────────────────────────────────────────
 
+
 @router.get("")
 async def list_scenarios(
     tenant: Annotated[TenantContext, Depends(get_current_tenant)],
@@ -45,11 +72,13 @@ async def list_scenarios(
 ) -> list[dict[str, Any]]:
     """테넌트 소유 시나리오의 최신 버전 1개씩 요약 반환."""
     return await repo.list_by_tenant(
-        tenant.tenant_id, include_drafts=include_drafts,
+        tenant.tenant_id,
+        include_drafts=include_drafts,
     )
 
 
 # ── 저장 (새 버전 생성) ──────────────────────────────────────────────────────
+
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def save_scenario(
@@ -67,13 +96,17 @@ async def save_scenario(
     except ValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "DSL_VALIDATION_ERROR", "errors": e.errors()},
+            detail={
+                "code": "DSL_VALIDATION_ERROR",
+                "errors": _sanitize_pydantic_errors(e.errors()),
+            },
         ) from e
 
     return await repo.save(scenario.model_dump(by_alias=True))
 
 
 # ── 검증 (저장 없이) ─────────────────────────────────────────────────────────
+
 
 @router.post("/validate")
 async def validate_scenario(
@@ -101,6 +134,7 @@ async def validate_scenario(
 
 # ── 조회 ─────────────────────────────────────────────────────────────────────
 
+
 @router.get("/{scenario_id}")
 async def get_scenario(
     scenario_id: str,
@@ -126,11 +160,13 @@ async def get_scenario(
         return await repo.get_version(tenant.tenant_id, scenario_id, v)
     except ScenarioNotFoundError as e:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
         ) from e
 
 
 # ── 발행 ─────────────────────────────────────────────────────────────────────
+
 
 class _PublishPayload(dict):
     """payload = {"version": int}"""
@@ -140,10 +176,13 @@ class _PublishPayload(dict):
 async def publish_scenario(
     scenario_id: str,
     payload: dict[str, Any],
+    request: Request,
     tenant: Annotated[
-        TenantContext, Depends(require_roles("admin", "super_admin")),
+        TenantContext,
+        Depends(require_roles("admin", "super_admin")),
     ],
     repo: ScenarioRepository = Depends(ScenarioRepository),
+    audit: Annotated[AuditEmitter, Depends(get_audit_emitter)] = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """version 을 published=True 로. 기존 published 버전은 자동 False."""
     version = payload.get("version")
@@ -153,18 +192,34 @@ async def publish_scenario(
             detail="payload.version (int >= 1) required",
         )
     try:
-        return await repo.publish(tenant.tenant_id, scenario_id, version)
+        result = await repo.publish(tenant.tenant_id, scenario_id, version)
     except ScenarioNotFoundError as e:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
         ) from e
     except ScenarioConflictError as e:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(e),
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
         ) from e
+
+    # Phase N (N1.3) — audit emit: scenario.publish
+    if audit is not None:
+        await audit.emit(
+            action="scenario.publish",
+            event_type="scenario_publish",
+            actor=tenant,
+            resource={"type": "scenario", "id": scenario_id},
+            after={"published_version": version},
+            request=request,
+        )
+
+    return result
 
 
 # ── 삭제 ─────────────────────────────────────────────────────────────────────
+
 
 @router.delete(
     "/{scenario_id}/versions/{version}",
@@ -173,21 +228,37 @@ async def publish_scenario(
 async def delete_scenario_version(
     scenario_id: str,
     version: int,
+    request: Request,
     tenant: Annotated[
-        TenantContext, Depends(require_roles("admin", "super_admin")),
+        TenantContext,
+        Depends(require_roles("admin", "super_admin")),
     ],
     repo: ScenarioRepository = Depends(ScenarioRepository),
+    audit: Annotated[AuditEmitter, Depends(get_audit_emitter)] = None,  # type: ignore[assignment]
 ) -> None:
     try:
         await repo.delete_version(tenant.tenant_id, scenario_id, version)
     except ScenarioNotFoundError as e:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(e),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
         ) from e
     except ScenarioConflictError as e:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(e),
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
         ) from e
+
+    # Phase N (N1.3) — audit emit: scenario.delete_version
+    if audit is not None:
+        await audit.emit(
+            action="scenario.delete_version",
+            event_type="scenario_delete_version",
+            actor=tenant,
+            resource={"type": "scenario", "id": scenario_id},
+            before={"version": version},
+            request=request,
+        )
 
 
 # quelled: used for type-only annotation stability
