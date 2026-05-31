@@ -39,6 +39,11 @@ build/
 *.out
 vendor/
 
+# Python virtualenvs (legacy emulator 등 — 절대 커밋 금지)
+venv/
+.venv/
+**/venv/
+
 # Docker / build
 *.pid
 .cache/
@@ -67,3 +72,15 @@ trivy-*.sarif
 *.bak
 *.orig
 *.rej
+.gstack/
+
+# ── release prep 보강 (2026-05-23) ──
+# MongoDB keyfile (시크릿 — 절대 커밋 금지)
+mongo/mongo-keyfile
+# 부하/테스트 아티팩트
+/load_test_*.log
+/test_results/
+services/freeswitch/results/
+services/backend/.coverage*
+# Vite/Vitest 임시 빌드 산출물
+services/frontend/*.timestamp-*.mjs
